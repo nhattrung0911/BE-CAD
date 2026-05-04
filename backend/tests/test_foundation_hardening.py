@@ -23,7 +23,7 @@ def setup_function():
 
 
 def test_vendor_asset_upload_requires_admin_api_key_when_configured():
-    settings.admin_api_key = "secret-admin-key"
+    settings.admin_api_key = "test-admin-key"
 
     response = client.post(
         "/api/v1/vendor-assets",
@@ -35,11 +35,11 @@ def test_vendor_asset_upload_requires_admin_api_key_when_configured():
 
 
 def test_vendor_asset_upload_accepts_valid_admin_api_key():
-    settings.admin_api_key = "secret-admin-key"
+    settings.admin_api_key = "test-admin-key"
 
     response = client.post(
         "/api/v1/vendor-assets",
-        headers={"X-Admin-API-Key": "secret-admin-key"},
+        headers={"X-Admin-API-Key": "test-admin-key"},
         data={"product_id": "hex-bolt-iso4014", "format": "glb"},
         files={"file": ("bolt.glb", b"glb-data", "model/gltf-binary")},
     )
