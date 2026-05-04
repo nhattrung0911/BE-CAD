@@ -89,7 +89,7 @@ def test_seed_demo_catalog_makes_production_ready():
         seeded = seed_demo_catalog()
         response = client.get("/ready")
 
-        assert seeded == 5
+        assert seeded == 6
         assert response.status_code == 200
         assert response.json()["checks"]["catalog"] == "ok"
     finally:
@@ -153,7 +153,7 @@ def test_catalog_repository_list_products_uses_bounded_query_count():
     finally:
         event.remove(engine, "before_cursor_execute", before_cursor_execute)
 
-    assert len(products) == 5
+    assert len(products) == 6
     assert len(statements) <= 2, statements
 
 

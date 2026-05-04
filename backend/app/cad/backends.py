@@ -36,6 +36,8 @@ class CadQueryBackend(CadBackend):
         family = template_registry.get_by_product(product_id).family
         if family == "hex_bolt":
             shape = self._hex_bolt(params)
+        elif family == "hex_nut":
+            shape = self._hex_nut(params)
         elif family == "washer":
             shape = self._washer(params)
         elif family == "retaining_ring":
@@ -78,15 +80,67 @@ class CadQueryBackend(CadBackend):
     def _hex_bolt(self, params: dict[str, Any]):
         for key in ["d", "L", "P", "k", "s", "b"]:
             if key not in params:
-                raise ValueError(f"Missing required params: ['{key}']")
+                raise ValueError(f"Missing required params for hex_bolt: {key!r}")
         d = float(params["d"])
-        length = float(params["L"])
+        total_length = float(params["L"])
         head_height = float(params["k"])
         across_flats = float(params["s"])
-        radius = across_flats / math.sqrt(3)
-        head = self.cq.Workplane("XY").polygon(6, radius * 2).extrude(head_height)
-        shank = self.cq.Workplane("XY").circle(d / 2).extrude(length).translate((0, 0, -length))
-        return head.union(shank)
+        thread_length = float(params["b"])
+        pitch = float(params["P"])
+        shank_radius = d / 2
+        circumradius = across_flats / math.sqrt(3)
+        grip_length = max(total_length - thread_length, 0.0)
+        minor_radius = max(shank_radius - 0.6134 * pitch, shank_radius * 0.75)
+
+        head = self.cq.Workplane("XY").polygon(6, circumradius * 2).extrude(head_height)
+        try:
+            head = head.faces(">Z").chamfer(min(1.0, head_height * 0.12))
+            head = head.faces("<Z").chamfer(min(0.5, head_height * 0.08))
+        except Exception:
+            pass
+
+        bolt = head
+        if grip_length > 0:
+            grip = (
+                self.cq.Workplane("XY")
+                .workplane(offset=head_height)
+                .circle(shank_radius)
+                .extrude(grip_length)
+            )
+            bolt = bolt.union(grip)
+
+        thread_start = head_height + grip_length
+        if thread_length > 0:
+            thread_core = (
+                self.cq.Workplane("XY")
+                .workplane(offset=thread_start)
+                .circle(minor_radius)
+                .extrude(thread_length)
+            )
+            bolt = bolt.union(thread_core)
+
+        return bolt
+
+    def _hex_nut(self, params: dict[str, Any]):
+        for key in ["d", "s", "m"]:
+            if key not in params:
+                raise ValueError(f"Missing required params for hex_nut: {key!r}")
+
+        d = float(params["d"])
+        across_flats = float(params["s"])
+        nut_height = float(params["m"])
+        circumradius = across_flats / math.sqrt(3)
+        bore_radius = d / 2
+
+        nut = self.cq.Workplane("XY").polygon(6, circumradius * 2).extrude(nut_height)
+        try:
+            chamfer_size = min(0.8, nut_height * 0.1)
+            nut = nut.faces(">Z").chamfer(chamfer_size)
+            nut = nut.faces("<Z").chamfer(chamfer_size)
+        except Exception:
+            pass
+
+        return nut.faces(">Z").workplane().circle(bore_radius).cutThruAll()
 
     def _export(self, shape, fmt: str, family: str, params: dict[str, Any], quality: str) -> tuple[bytes, dict[str, Any]]:
         if fmt == "glb":
