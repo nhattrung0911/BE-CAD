@@ -8,3 +8,16 @@ backend/tests/**/__pycache__/
 frontend-demo/node_modules/
 frontend-demo/dist/
 frontend-demo/.vite/
+
+# Environments
+.env
+.env.*
+!.env.example
+
+# IDEs & OS
+.vscode/
+.idea/
+.DS_Store
+*.db
+*.sqlite
+*.sqlite3
