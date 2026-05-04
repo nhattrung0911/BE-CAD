@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -81,6 +81,17 @@ class CatalogProduct(TimestampMixin, Base):
     family: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     unit: Mapped[str] = mapped_column(String(16), default="mm", nullable=False)
+    parameter_specs: Mapped[list["CatalogParameterSpec"]] = relationship(
+        back_populates="product",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="CatalogParameterSpec.sort_order, CatalogParameterSpec.id",
+    )
+    variants: Mapped[list["CatalogVariant"]] = relationship(
+        back_populates="product",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class CatalogParameterSpec(TimestampMixin, Base):
@@ -101,6 +112,7 @@ class CatalogParameterSpec(TimestampMixin, Base):
     required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     values_json: Mapped[list | None] = mapped_column(JSON)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    product: Mapped["CatalogProduct"] = relationship(back_populates="parameter_specs")
 
 
 class CatalogVariant(TimestampMixin, Base):
@@ -123,3 +135,4 @@ class CatalogVariant(TimestampMixin, Base):
     diameter_label: Mapped[str] = mapped_column(String(64), nullable=False)
     params_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     material: Mapped[str] = mapped_column(String(64), default="steel", nullable=False)
+    product: Mapped["CatalogProduct"] = relationship(back_populates="variants")

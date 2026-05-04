@@ -1,5 +1,5 @@
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.db.models import CatalogParameterSpec, CatalogProduct, CatalogVariant
 from app.schemas.product import ParameterSpec, Product, ProductVariant
@@ -14,30 +14,41 @@ class CatalogRepository:
         return self.session.scalar(select(CatalogProduct.id).limit(1)) is not None
 
     def list_products(self) -> list[Product]:
-        products = self.session.scalars(select(CatalogProduct).order_by(CatalogProduct.product_id)).all()
+        products = self.session.scalars(
+            select(CatalogProduct)
+            .options(selectinload(CatalogProduct.parameter_specs))
+            .order_by(CatalogProduct.product_id)
+        ).all()
         return [self._to_product(product) for product in products]
 
     def get_product(self, product_id: str) -> Product:
-        product = self.session.scalar(select(CatalogProduct).where(CatalogProduct.product_id == product_id))
+        product = self.session.scalar(
+            select(CatalogProduct)
+            .options(selectinload(CatalogProduct.parameter_specs))
+            .where(CatalogProduct.product_id == product_id)
+        )
         if product is None:
             raise KeyError(product_id)
         return self._to_product(product)
 
     def list_variants(self, product_id: str) -> list[ProductVariant]:
-        product = self.get_product(product_id)
         variants = self.session.scalars(
             select(CatalogVariant)
+            .options(joinedload(CatalogVariant.product))
             .where(CatalogVariant.product_id == product_id)
             .order_by(CatalogVariant.variant_id)
         ).all()
-        return [self._to_variant(product, variant) for variant in variants]
+        return [self._to_variant(variant.product, variant) for variant in variants]
 
     def get_variant(self, variant_id: str) -> ProductVariant:
-        variant = self.session.scalar(select(CatalogVariant).where(CatalogVariant.variant_id == variant_id))
+        variant = self.session.scalar(
+            select(CatalogVariant)
+            .options(joinedload(CatalogVariant.product))
+            .where(CatalogVariant.variant_id == variant_id)
+        )
         if variant is None:
             raise KeyError(variant_id)
-        product = self.get_product(variant.product_id)
-        return self._to_variant(product, variant)
+        return self._to_variant(variant.product, variant)
 
     def replace_product_catalog(
         self,
@@ -90,11 +101,6 @@ class CatalogRepository:
         self.session.flush()
 
     def _to_product(self, product: CatalogProduct) -> Product:
-        specs = self.session.scalars(
-            select(CatalogParameterSpec)
-            .where(CatalogParameterSpec.product_id == product.product_id)
-            .order_by(CatalogParameterSpec.sort_order, CatalogParameterSpec.id)
-        ).all()
         return Product(
             product_id=product.product_id,
             standard=product.standard,
@@ -110,11 +116,11 @@ class CatalogRepository:
                     required=spec.required,
                     values=spec.values_json,
                 )
-                for spec in specs
+                for spec in product.parameter_specs
             ],
         )
 
-    def _to_variant(self, product: Product, variant: CatalogVariant) -> ProductVariant:
+    def _to_variant(self, product: CatalogProduct | Product, variant: CatalogVariant) -> ProductVariant:
         return ProductVariant(
             variant_id=variant.variant_id,
             product_id=variant.product_id,

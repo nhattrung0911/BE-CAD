@@ -1,10 +1,12 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from app.bootstrap import database as database_bootstrap
 from app.bootstrap.seed_catalog import seed_demo_catalog
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import Base, SessionLocal, engine
 from app.main import app
+from app.repositories.catalog import CatalogRepository
 from app.schemas.product import ParameterSpec, Product, ProductVariant
 from app.services.product_service import ProductService
 
@@ -135,3 +137,39 @@ def test_database_bootstrap_rejects_partial_legacy_schema(monkeypatch):
         assert "partial legacy schema" in str(exc)
     else:
         raise AssertionError("Expected partial legacy schema to be rejected")
+
+
+def test_catalog_repository_list_products_uses_bounded_query_count():
+    seed_demo_catalog()
+    statements = []
+
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        with SessionLocal() as session:
+            products = CatalogRepository(session).list_products()
+    finally:
+        event.remove(engine, "before_cursor_execute", before_cursor_execute)
+
+    assert len(products) == 5
+    assert len(statements) <= 2, statements
+
+
+def test_catalog_repository_get_variant_uses_single_query():
+    seed_demo_catalog()
+    statements = []
+
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        with SessionLocal() as session:
+            variant = CatalogRepository(session).get_variant("hex-bolt-iso4014-m8x30")
+    finally:
+        event.remove(engine, "before_cursor_execute", before_cursor_execute)
+
+    assert variant.variant_id == "hex-bolt-iso4014-m8x30"
+    assert len(statements) == 1, statements
