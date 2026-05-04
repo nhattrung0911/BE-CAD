@@ -166,12 +166,25 @@ def test_production_settings_require_redis_ready_flag():
 
 
 def test_metrics_reflect_real_request_count():
-    before = client.get("/metrics").json()["cad_platform_requests_total"]
+    before_text = client.get("/metrics").text
+    before = _prometheus_metric_value(before_text, "cad_platform_requests_total")
 
     client.get("/health")
 
-    after = client.get("/metrics").json()["cad_platform_requests_total"]
+    after_text = client.get("/metrics").text
+    after = _prometheus_metric_value(after_text, "cad_platform_requests_total")
     assert after >= before + 1
+
+
+def test_metrics_prometheus_format():
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "# HELP cad_platform_requests_total" in response.text
+    assert "# TYPE cad_platform_requests_total counter" in response.text
+    assert "# HELP cad_platform_cache_hits_total" in response.text
+    assert "# HELP cad_platform_cache_misses_total" in response.text
 
 
 def test_ready_fails_when_redis_is_required_but_unavailable():
@@ -276,3 +289,10 @@ def test_product_service_variant_lookup_is_cached(monkeypatch):
 
     assert first.variant_id == second.variant_id == "hex-bolt-iso4014-m8x30"
     assert call_count["count"] <= len(service.list_products())
+
+
+def _prometheus_metric_value(payload: str, metric_name: str) -> int:
+    for line in payload.splitlines():
+        if line.startswith(f"{metric_name} "):
+            return int(float(line.split(" ", 1)[1]))
+    raise AssertionError(f"Metric not found: {metric_name}")

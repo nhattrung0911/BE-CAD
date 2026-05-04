@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from app.schemas.model import ModelResolveRequest, ModelResolveResponse
 from app.services.model_resolver import model_resolver
 from app.services.product_service import product_service
@@ -7,7 +7,7 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 
 @router.post("/resolve", response_model=ModelResolveResponse)
-def resolve_model(request: ModelResolveRequest):
+def resolve_model(request: ModelResolveRequest, http_request: Request):
     try:
         product_service.validate_params(request.product_id, request.params)
     except KeyError:
@@ -15,4 +15,13 @@ def resolve_model(request: ModelResolveRequest):
     except ValueError as exc:
         detail = exc.args[0] if exc.args else "Invalid product parameters"
         raise HTTPException(status_code=400, detail=detail)
-    return model_resolver.resolve(request)
+    resolved = model_resolver.resolve(request)
+    _record_cache_metrics(http_request, resolved.cache)
+    if resolved.status == "queued":
+        http_request.app.state.metrics["cad_platform_jobs_queued_total"] += 1
+    return resolved
+
+
+def _record_cache_metrics(http_request: Request, cache_status: str) -> None:
+    key = "cad_platform_cache_hits_total" if cache_status == "hit" else "cad_platform_cache_misses_total"
+    http_request.app.state.metrics[key] += 1

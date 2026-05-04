@@ -11,6 +11,7 @@ from app.core.database import init_db, should_auto_create_schema
 from app.api.routes_geometry import router as geometry_router
 from app.api.routes_ingestion import router as ingestion_router
 from app.api.routes_model_jobs import router as model_jobs_router
+from app.api.routes_metrics import router as metrics_router
 from app.api.routes_products import router as products_router
 from app.api.routes_models import router as models_router
 from app.api.routes_vendor_assets import router as vendor_assets_router
@@ -23,7 +24,9 @@ app = FastAPI(title=settings.app_name)
 app.state.metrics = {
     "cad_platform_requests_total": 0,
     "cad_platform_request_latency_ms_total": 0,
-    "cad_platform_jobs_queued": 0,
+    "cad_platform_jobs_queued_total": 0,
+    "cad_platform_cache_hits_total": 0,
+    "cad_platform_cache_misses_total": 0,
 }
 
 app.add_middleware(
@@ -46,6 +49,7 @@ app.include_router(geometry_router, prefix="/api/v1")
 app.include_router(model_jobs_router, prefix="/api/v1")
 app.include_router(vendor_assets_router, prefix="/api/v1")
 app.include_router(ingestion_router, prefix="/api/v1")
+app.include_router(metrics_router)
 
 
 @app.middleware("http")
@@ -71,7 +75,3 @@ def ready():
     status_code, payload = readiness_payload()
     return JSONResponse(status_code=status_code, content=payload)
 
-
-@app.get("/metrics")
-def metrics(request: Request):
-    return dict(request.app.state.metrics)

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -17,7 +17,14 @@ def _params_for_lod(params: dict, lod: str) -> dict:
     return {**params, "lod": lod}
 
 
-def _resolve_geometry(*, product_id: str, params: dict, lod: GeometryLod, variant_id: str | None = None) -> GeometryResponse:
+def _resolve_geometry(
+    *,
+    http_request: Request,
+    product_id: str,
+    params: dict,
+    lod: GeometryLod,
+    variant_id: str | None = None,
+) -> GeometryResponse:
     try:
         product_service.validate_params(product_id, params)
     except KeyError:
@@ -36,6 +43,9 @@ def _resolve_geometry(*, product_id: str, params: dict, lod: GeometryLod, varian
             quality="preview",
         )
     )
+    _record_cache_metrics(http_request, resolved.cache)
+    if resolved.status == "queued":
+        http_request.app.state.metrics["cad_platform_jobs_queued_total"] += 1
     return GeometryResponse(
         status=resolved.status,
         hash=params_hash,
@@ -53,17 +63,23 @@ def _resolve_geometry(*, product_id: str, params: dict, lod: GeometryLod, varian
 
 
 @router.post("/generate", response_model=GeometryResponse)
-def generate_geometry(request: GeometryGenerateRequest):
-    return _resolve_geometry(product_id=request.product_id, params=request.params, lod=request.lod)
+def generate_geometry(request: GeometryGenerateRequest, http_request: Request):
+    return _resolve_geometry(http_request=http_request, product_id=request.product_id, params=request.params, lod=request.lod)
 
 
 @router.get("/variant/{variant_id}", response_model=GeometryResponse)
-def geometry_for_variant(variant_id: str, lod: GeometryLod = "medium"):
+def geometry_for_variant(variant_id: str, http_request: Request, lod: GeometryLod = "medium"):
     try:
         variant = product_service.get_variant(variant_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Variant not found")
-    return _resolve_geometry(product_id=variant.product_id, params=variant.params, lod=lod, variant_id=variant.variant_id)
+    return _resolve_geometry(
+        http_request=http_request,
+        product_id=variant.product_id,
+        params=variant.params,
+        lod=lod,
+        variant_id=variant.variant_id,
+    )
 
 
 @router.get("/hash/{params_hash}")
@@ -81,3 +97,8 @@ def geometry_by_hash(params_hash: str):
             "ETag": f'"{params_hash}"',
         },
     )
+
+
+def _record_cache_metrics(http_request: Request, cache_status: str) -> None:
+    key = "cad_platform_cache_hits_total" if cache_status == "hit" else "cad_platform_cache_misses_total"
+    http_request.app.state.metrics[key] += 1
