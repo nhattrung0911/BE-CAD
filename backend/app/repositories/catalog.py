@@ -2,8 +2,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.db.models import CatalogParameterSpec, CatalogProduct, CatalogVariant
+from app.domain.geometry_hashes import build_geometry_hashes
 from app.schemas.product import ParameterSpec, Product, ProductVariant
-from app.services.demo_catalog import build_geometry_hashes
 
 
 class CatalogRepository:

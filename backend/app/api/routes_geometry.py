@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.domain.geometry_hashes import params_for_lod
 from app.repositories.artifacts import ArtifactRepository
 from app.schemas.geometry import GeometryGenerateRequest, GeometryLod, GeometryResponse
 from app.schemas.model import ModelResolveRequest
@@ -12,10 +13,6 @@ from app.services.product_service import product_service
 from app.workers.tasks import AsyncDispatchUnavailable
 
 router = APIRouter(prefix="/geometry", tags=["geometry"])
-
-
-def _params_for_lod(params: dict, lod: str) -> dict:
-    return {**params, "lod": lod}
 
 
 def _resolve_geometry(
@@ -34,7 +31,7 @@ def _resolve_geometry(
         detail = exc.args[0] if exc.args else "Invalid product parameters"
         raise HTTPException(status_code=400, detail=detail)
 
-    resolver_params = _params_for_lod(params, lod)
+    resolver_params = params_for_lod(params, lod)
     params_hash = stable_params_hash(product_id, settings.template_version, "preview", "glb", resolver_params)
     try:
         resolved = model_resolver.resolve(
