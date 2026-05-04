@@ -1,0 +1,22 @@
+[
+  {"product_id":"hex-bolt-iso4014","params":{"d":8,"L":30,"P":1.25,"k":5.3,"s":13,"b":22,"lod":"low"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":8,"L":30,"P":1.25,"k":5.3,"s":13,"b":22,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":8,"L":40,"P":1.25,"k":5.3,"s":13,"b":28,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":8,"L":50,"P":1.25,"k":5.3,"s":13,"b":28,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":10,"L":30,"P":1.5,"k":6.4,"s":17,"b":26,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":10,"L":40,"P":1.5,"k":6.4,"s":17,"b":32,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":10,"L":50,"P":1.5,"k":6.4,"s":17,"b":32,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":12,"L":40,"P":1.75,"k":7.5,"s":19,"b":30,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":12,"L":50,"P":1.75,"k":7.5,"s":19,"b":36,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":12,"L":60,"P":1.75,"k":7.5,"s":19,"b":36,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":16,"L":50,"P":2.0,"k":10,"s":24,"b":38,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":16,"L":60,"P":2.0,"k":10,"s":24,"b":44,"lod":"medium"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":8,"s":13.0,"m":6.8,"lod":"low"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":8,"s":13.0,"m":6.8,"lod":"medium"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":10,"s":17.0,"m":8.4,"lod":"medium"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":12,"s":19.0,"m":10.8,"lod":"medium"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":16,"s":24.0,"m":14.8,"lod":"medium"}},
+  {"product_id":"washer-iso7089","params":{"OD":16,"ID":8.4,"h":1.6,"lod":"medium"}},
+  {"product_id":"washer-iso7089","params":{"OD":20,"ID":10.5,"h":2.0,"lod":"medium"}},
+  {"product_id":"washer-iso7089","params":{"OD":24,"ID":13.0,"h":2.5,"lod":"medium"}}
+]
