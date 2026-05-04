@@ -1,0 +1,14 @@
+[
+  {
+    "product_id": "hex-bolt-iso4014",
+    "params": {"d": 6, "L": 30, "P": 1, "k": 4, "s": 10, "b": 18},
+    "format": "glb",
+    "quality": "preview"
+  },
+  {
+    "product_id": "retaining-ring-gb891",
+    "params": {"OD": 100, "d1": 13, "h": 7},
+    "format": "glb",
+    "quality": "preview"
+  }
+]

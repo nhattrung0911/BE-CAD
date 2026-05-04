@@ -1,0 +1,55 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.example
+    environment:
+      MODEL_SYNC_GENERATION: "false"
+    volumes:
+      - ../backend/storage:/app/storage
+    depends_on:
+      - redis
+      - postgres
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: celery -A app.workers.tasks:celery_app worker -Q preview_fast,cad_generate,engineering_step,batch_pregenerate --loglevel=info
+    env_file:
+      - .env.example
+    environment:
+      MODEL_SYNC_GENERATION: "false"
+    volumes:
+      - ../backend/storage:/app/storage
+    depends_on:
+      - redis
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fastener_cad
+      POSTGRES_USER: fastener
+      POSTGRES_PASSWORD: fastener
+    ports:
+      - "5432:5432"
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"

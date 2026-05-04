@@ -1,0 +1,129 @@
+from app.core.config import settings
+from app.core.database import SessionLocal
+from app.cad.backends import get_cad_backend
+from app.repositories.artifacts import ArtifactRepository
+from app.repositories.vendor_assets import VendorAssetRepository
+from app.services.artifact_service import artifact_service
+from app.services.cache_service import cache
+from app.services.hash_service import stable_params_hash
+from app.services.jobs import enqueue_generation_job, queue_for_request
+from app.services.job_runner import model_artifact_key
+from app.schemas.model import ModelResolveRequest, ModelResolveResponse, ArtifactResponse
+
+
+class ModelResolver:
+    def resolve(self, request: ModelResolveRequest) -> ModelResolveResponse:
+        params_hash = stable_params_hash(
+            request.product_id,
+            settings.template_version,
+            request.quality,
+            request.format,
+            request.params,
+        )
+        artifact_key = model_artifact_key(request.product_id, params_hash, request.quality, request.format)
+        cache_key = f"model:{artifact_key}"
+
+        cached = cache.get(cache_key)
+        if cached:
+            return ModelResolveResponse(
+                status="ready",
+                artifact=ArtifactResponse(**cached["artifact"]),
+                cache="hit",
+                source=cached.get("source", "cache"),
+            )
+
+        with SessionLocal() as session:
+            artifacts = ArtifactRepository(session)
+            existing = artifacts.find_resolved_model(request.product_id, params_hash, request.format, request.quality)
+            if existing and artifact_service.exists(existing.storage_key):
+                artifact_response = self._artifact_response(
+                    fmt=existing.format,
+                    quality=existing.quality,
+                    url=f"{settings.public_artifact_prefix}/{existing.storage_key}",
+                    sha256=existing.sha256,
+                    file_size=existing.file_size,
+                )
+                cache.set(cache_key, {"artifact": artifact_response.model_dump(), "source": "cache_db"})
+                return ModelResolveResponse(status="ready", artifact=artifact_response, cache="hit", source="cache_db")
+
+            vendor = VendorAssetRepository(session).find_exact(request.product_id, request.format)
+            if vendor:
+                artifact_response = self._artifact_response(
+                    fmt=vendor.format,
+                    quality=request.quality,
+                    url=f"{settings.public_raw_asset_prefix}/{vendor.storage_key}",
+                    sha256=vendor.sha256,
+                    file_size=vendor.file_size,
+                )
+                cache.set(cache_key, {"artifact": artifact_response.model_dump(), "source": "vendor_exact"})
+                return ModelResolveResponse(status="ready", artifact=artifact_response, cache="miss", source="vendor_exact")
+
+        lock = cache.acquire_lock(f"lock:{cache_key}", ttl_seconds=120)
+        if lock is None:
+            job = enqueue_generation_job(
+                queue_name=queue_for_request(request.format, request.quality),
+                product_id=request.product_id,
+                params=request.params,
+                fmt=request.format,
+                quality=request.quality,
+                template_version=settings.template_version,
+            )
+            return ModelResolveResponse(status="queued", cache="miss", source="queued_parametric", job_id=job.job_id)
+
+        try:
+            if not self._may_generate_inline(request):
+                job = enqueue_generation_job(
+                    queue_name=queue_for_request(request.format, request.quality),
+                    product_id=request.product_id,
+                    params=request.params,
+                    fmt=request.format,
+                    quality=request.quality,
+                    template_version=settings.template_version,
+                )
+                from app.workers.tasks import dispatch_generation_job
+
+                dispatch_generation_job(job.queue_name, job.job_id)
+                return ModelResolveResponse(status="queued", cache="miss", source="queued_parametric", job_id=job.job_id)
+
+            generated = get_cad_backend(settings.cad_backend).generate(request.product_id, request.params, request.format, request.quality)
+            artifact = artifact_service.put_generated_model(
+                product_id=request.product_id,
+                params_hash=params_hash,
+                fmt=request.format,
+                quality=request.quality,
+                key=artifact_key,
+                data=generated.content,
+                source="generated_parametric",
+                metadata=generated.metadata,
+            )
+            artifact_response = {
+                "format": request.format,
+                "quality": request.quality,
+                "url": artifact["url"],
+                "sha256": artifact["sha256"],
+                "file_size": artifact["file_size"],
+            }
+            cache.set(cache_key, {"artifact": artifact_response, "source": "generated_parametric"})
+            return ModelResolveResponse(
+                status="ready",
+                artifact=ArtifactResponse(**artifact_response),
+                cache="miss",
+                source="generated_parametric",
+            )
+        except Exception as exc:
+            return ModelResolveResponse(status="failed", message=str(exc), cache="miss")
+        finally:
+            cache.release_lock(lock)
+
+    def _may_generate_inline(self, request: ModelResolveRequest) -> bool:
+        return (
+            settings.model_sync_generation
+            and request.format == "glb"
+            and request.quality == "preview"
+        )
+
+    def _artifact_response(self, *, fmt: str, quality: str, url: str, sha256: str, file_size: int) -> ArtifactResponse:
+        return ArtifactResponse(format=fmt, quality=quality, url=url, sha256=sha256, file_size=file_size)
+
+
+model_resolver = ModelResolver()
