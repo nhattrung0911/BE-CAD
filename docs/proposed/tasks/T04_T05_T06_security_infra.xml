@@ -1,0 +1,467 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tasks>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T04" priority="BLOCKER" category="security">
+  <title>Auth guard on /ingest/2d + rate limit annotation</title>
+  <why>
+    POST /api/v1/ingest/2d has no authentication. Any internet client
+    can push arbitrary data into the catalog pipeline. Must require
+    X-Admin-API-Key when ADMIN_API_KEY is configured.
+  </why>
+
+  <files_to_change>
+    <file>backend/app/api/routes_ingestion.py</file>
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="backend/app/api/routes_ingestion.py">
+      <patch><![CDATA[
+# At top of file, add import:
+from app.core.security import require_admin_api_key
+from fastapi import Depends
+
+# Find the ingest_2d route and add Depends:
+# BEFORE:
+@router.post("/2d", response_model=DrawingIngestResponse)
+def ingest_2d(request: DrawingIngestRequest, db: Session = Depends(get_db)):
+
+# AFTER:
+@router.post("/2d", response_model=DrawingIngestResponse)
+def ingest_2d(
+    request: DrawingIngestRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_admin_api_key),
+):
+      ]]></patch>
+      Note: require_admin_api_key already exists in core/security.py and
+      returns None when admin_api_key is not configured (open access in
+      local dev). The Depends() pattern matches the existing vendor-assets route.
+    </step>
+  </implementation>
+
+  <tests file="backend/tests/test_production_hardening_v2.py" append="true">
+    <code><![CDATA[
+from fastapi.testclient import TestClient
+from app.main import app
+from app.core.config import settings
+
+client = TestClient(app)
+
+
+def test_ingest_2d_requires_admin_key_when_configured():
+    settings.admin_api_key = "test-admin-secret"
+    try:
+        r = client.post(
+            "/api/v1/ingest/2d",
+            json={"product_id": "hex-bolt-iso4014", "content": "M8 d:8.0 L:30"},
+        )
+        assert r.status_code == 401
+    finally:
+        settings.admin_api_key = None
+
+
+def test_ingest_2d_accepts_valid_admin_key():
+    settings.admin_api_key = "test-admin-secret"
+    try:
+        r = client.post(
+            "/api/v1/ingest/2d",
+            headers={"X-Admin-API-Key": "test-admin-secret"},
+            json={"product_id": "hex-bolt-iso4014", "content": "M8 d:8.0 L:30"},
+        )
+        assert r.status_code in (200, 422)  # 422 = valid auth, bad body
+    finally:
+        settings.admin_api_key = None
+
+
+def test_ingest_2d_open_when_no_admin_key_configured():
+    settings.admin_api_key = None
+    r = client.post(
+        "/api/v1/ingest/2d",
+        json={"product_id": "hex-bolt-iso4014", "content": "M8 d:8.0 L:30"},
+    )
+    assert r.status_code != 401
+    ]]></code>
+  </tests>
+
+  <commit_message>fix(T04): require admin API key on /ingest/2d endpoint</commit_message>
+</task>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T05" priority="BLOCKER" category="infra">
+  <title>Nginx config — TLS, rate limiting, immutable GLB caching</title>
+  <why>
+    No reverse proxy → API port 8000 exposed directly, no rate limiting,
+    no TLS, no gzip. Geometry hash URLs can't be CDN-cached.
+    Nginx must sit in front of API and enforce limits per route.
+  </why>
+
+  <files_to_change>
+    <file>infra/nginx.conf</file>     <!-- CREATE NEW -->
+    <file>infra/nginx.dev.conf</file> <!-- CREATE NEW - no TLS for local -->
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="infra/nginx.conf">
+      <code><![CDATA[
+# Production Nginx config for api.mecsu.vn
+# Requires: SSL cert at /etc/nginx/ssl/{fullchain,privkey}.pem
+
+user  nginx;
+worker_processes  auto;
+error_log  /var/log/nginx/error.log warn;
+pid        /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+    use epoll;
+}
+
+http {
+    include      /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile     on;
+    tcp_nopush   on;
+    tcp_nodelay  on;
+    keepalive_timeout 65;
+    server_tokens off;
+
+    # ── Logging ─────────────────────────────────────────────────
+    log_format main '$remote_addr "$request" $status $body_bytes_sent '
+                    '$request_time "$http_x_request_id"';
+    access_log /var/log/nginx/access.log main;
+
+    # ── Compression ─────────────────────────────────────────────
+    gzip on;
+    gzip_types application/json text/plain application/octet-stream;
+    gzip_min_length 1024;
+    gzip_vary on;
+
+    # ── Rate limit zones ─────────────────────────────────────────
+    # geometry/generate and /variant — heavy work, strict limit
+    limit_req_zone $binary_remote_addr zone=geo_generate:10m rate=20r/m;
+    # geometry/hash — immutable, more generous (CDN should absorb most)
+    limit_req_zone $binary_remote_addr zone=geo_hash:10m    rate=120r/m;
+    # admin ingestion — very strict
+    limit_req_zone $binary_remote_addr zone=admin:10m       rate=10r/m;
+    # general API reads
+    limit_req_zone $binary_remote_addr zone=general:10m     rate=60r/m;
+
+    # ── Upstream ─────────────────────────────────────────────────
+    upstream api_backend {
+        server api:8000;
+        keepalive 32;
+    }
+
+    # ── HTTP → HTTPS redirect ─────────────────────────────────────
+    server {
+        listen 80;
+        server_name api.mecsu.vn;
+        return 301 https://$host$request_uri;
+    }
+
+    # ── HTTPS API server ──────────────────────────────────────────
+    server {
+        listen 443 ssl http2;
+        server_name api.mecsu.vn;
+
+        ssl_certificate     /etc/nginx/ssl/fullchain.pem;
+        ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers off;
+        ssl_session_cache   shared:SSL:10m;
+        ssl_session_timeout 1d;
+
+        # ── Security headers ───────────────────────────────────
+        add_header X-Frame-Options DENY always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+        # ── Health / ready (no rate limit, no auth) ────────────
+        location = /health { proxy_pass http://api_backend; }
+        location = /ready  { proxy_pass http://api_backend; }
+        location = /metrics {
+            # Only allow from internal monitoring subnet
+            allow 10.0.0.0/8;
+            allow 172.16.0.0/12;
+            deny all;
+            proxy_pass http://api_backend;
+        }
+
+        # ── Geometry HASH — immutable, browser-cacheable ────────
+        location ~ ^/api/v1/geometry/hash/ {
+            limit_req zone=geo_hash burst=30 nodelay;
+            limit_req_status 429;
+
+            proxy_pass http://api_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_hide_header Cache-Control;
+            add_header Cache-Control "public, max-age=31536000, immutable" always;
+        }
+
+        # ── Geometry generate / variant ─────────────────────────
+        location /api/v1/geometry/ {
+            limit_req zone=geo_generate burst=5 nodelay;
+            limit_req_status 429;
+
+            proxy_pass http://api_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_read_timeout 35s;
+        }
+
+        # ── Admin — vendor assets upload ────────────────────────
+        location /api/v1/vendor-assets {
+            limit_req zone=admin burst=3 nodelay;
+            limit_req_status 429;
+            client_max_body_size 110M;
+            proxy_pass http://api_backend;
+            proxy_set_header Host $host;
+            proxy_read_timeout 120s;
+        }
+
+        # ── Admin — ingestion ───────────────────────────────────
+        location /api/v1/ingest/ {
+            limit_req zone=admin burst=3 nodelay;
+            limit_req_status 429;
+            proxy_pass http://api_backend;
+            proxy_set_header Host $host;
+        }
+
+        # ── General API ─────────────────────────────────────────
+        location /api/ {
+            limit_req zone=general burst=20 nodelay;
+            limit_req_status 429;
+            proxy_pass http://api_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Request-ID $request_id;
+        }
+
+        # ── Serve pre-built FE static (optional) ────────────────
+        location / {
+            root /var/www/html;
+            try_files $uri /index.html;
+            add_header Cache-Control "public, max-age=3600";
+        }
+    }
+}
+      ]]></code>
+    </step>
+
+    <step id="2" file="infra/nginx.dev.conf">
+      <code><![CDATA[
+# Local development Nginx — no TLS, relaxed limits
+user  nginx;
+worker_processes  1;
+events { worker_connections 512; }
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    limit_req_zone $binary_remote_addr zone=geo:5m rate=60r/m;
+
+    upstream api_backend { server api:8000; }
+
+    server {
+        listen 8080;
+        server_name localhost;
+
+        location ~ ^/api/v1/geometry/hash/ {
+            proxy_pass http://api_backend;
+            add_header Cache-Control "public, max-age=3600";
+        }
+        location /api/ {
+            limit_req zone=geo burst=20 nodelay;
+            proxy_pass http://api_backend;
+            proxy_set_header X-Request-ID $request_id;
+        }
+        location / { proxy_pass http://api_backend; }
+    }
+}
+      ]]></code>
+    </step>
+  </implementation>
+
+  <commit_message>feat(T05): Nginx config — TLS, rate limiting, immutable GLB headers</commit_message>
+</task>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T06" priority="BLOCKER" category="infra">
+  <title>Docker Compose — production-safe env, healthchecks, volumes</title>
+  <why>
+    docker-compose.yml uses env_file: .env.example (placeholder passwords).
+    No healthchecks on Redis or Postgres — API can start before DB is ready.
+    No persistent volumes for Postgres or MinIO — data lost on container restart.
+    API port 8000 exposed directly — should only be behind Nginx.
+  </why>
+
+  <files_to_change>
+    <file>infra/docker-compose.yml</file>
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="infra/docker-compose.yml">
+      FULL REPLACEMENT:
+      <code><![CDATA[
+# mecsu.vn Fastener CAD Platform — Docker Compose
+# Usage:
+#   cp infra/.env.production.example infra/.env
+#   # Edit infra/.env — change ALL CHANGE_ME values
+#   cd infra && docker compose up -d
+#
+# NEVER commit infra/.env
+
+version: "3.9"
+
+x-api-common: &api-common
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile.api
+  env_file: .env
+  volumes:
+    - ../backend/storage:/app/storage
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+
+  # ── API (2 replicas possible: docker compose scale api=2) ──────────
+  api:
+    <<: *api-common
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    # Do NOT expose 8000 publicly — only Nginx reaches it
+    expose:
+      - "8000"
+    environment:
+      MODEL_SYNC_GENERATION: "false"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Celery workers ─────────────────────────────────────────────────
+  worker:
+    <<: *api-common
+    command: >
+      celery -A app.workers.tasks:celery_app worker
+      -Q preview_fast,cad_generate,engineering_step,batch_pregenerate
+      --loglevel=info
+      --concurrency=2
+    environment:
+      MODEL_SYNC_GENERATION: "false"
+    deploy:
+      resources:
+        limits:
+          memory: 2G  # CadQuery/OCC is memory-hungry
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.workers.tasks:celery_app", "inspect", "ping", "-d", "celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Nginx (production) ─────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ── Redis 7 ───────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+    volumes:
+      - redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning",
+             "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── PostgreSQL 16 ─────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL",
+             "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MinIO (S3-compatible local storage) ───────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    expose:
+      - "9000"
+    ports:
+      - "9001:9001"  # MinIO Console — restrict in production firewall
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+      ]]></code>
+    </step>
+  </implementation>
+
+  <commit_message>fix(T06): docker-compose production-safe — .env, healthchecks, persistent volumes, no exposed API port</commit_message>
+</task>
+
+</tasks>

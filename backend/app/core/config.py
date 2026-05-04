@@ -37,12 +37,16 @@ class Settings(BaseSettings):
         if self.environment == "production":
             if self.cad_backend == "mock":
                 raise ValueError("CAD_BACKEND=mock is not allowed in production. Set CAD_BACKEND=cadquery")
+            if self.model_sync_generation:
+                raise ValueError("MODEL_SYNC_GENERATION=false is required in production.")
             if self.auto_create_schema:
                 raise ValueError("AUTO_CREATE_SCHEMA=true is not allowed in production. Use Alembic migrations.")
             if not self.require_redis_for_ready:
                 raise ValueError(
                     "REQUIRE_REDIS_FOR_READY must be true in production to prevent split-brain cache."
                 )
+            if not self.admin_api_key:
+                raise ValueError("ADMIN_API_KEY must be set in production.")
         return self
 
 

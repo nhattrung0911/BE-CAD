@@ -25,15 +25,29 @@ def setup_function():
 def test_production_resolve_creates_pending_model_job():
     settings.model_sync_generation = False
 
-    response = client.post(
-        "/api/v1/models/resolve",
-        json={
-            "product_id": "hex-bolt-iso4014",
-            "params": {"d": 6, "L": 30, "P": 1, "k": 4, "s": 10, "b": 18},
-            "format": "glb",
-            "quality": "preview",
-        },
-    )
+    from app.workers import tasks as worker_tasks
+
+    original_redis = settings.redis_url
+    original_ensure = worker_tasks.ensure_async_dispatch_available
+    original_dispatch = worker_tasks.dispatch_generation_job
+    settings.redis_url = "redis://fake"
+    worker_tasks.ensure_async_dispatch_available = lambda: None
+    worker_tasks.dispatch_generation_job = lambda queue_name, job_id: None
+
+    try:
+        response = client.post(
+            "/api/v1/models/resolve",
+            json={
+                "product_id": "hex-bolt-iso4014",
+                "params": {"d": 6, "L": 30, "P": 1, "k": 4, "s": 10, "b": 18},
+                "format": "glb",
+                "quality": "preview",
+            },
+        )
+    finally:
+        settings.redis_url = original_redis
+        worker_tasks.ensure_async_dispatch_available = original_ensure
+        worker_tasks.dispatch_generation_job = original_dispatch
 
     assert response.status_code == 200
     body = response.json()

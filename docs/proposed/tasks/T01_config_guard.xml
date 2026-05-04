@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<task id="T01" priority="BLOCKER" category="config">
+  <title>Production config guard — fail fast on unsafe defaults</title>
+  <why>
+    Currently the app starts with CAD_BACKEND=mock (returns JSON, not GLB),
+    AUTO_CREATE_SCHEMA=true (bypasses Alembic), and REQUIRE_REDIS_FOR_READY=false
+    (allows split-brain cache). These are silent failures that corrupt production.
+    The fix must raise ValueError at app startup — not at request time.
+  </why>
+
+  <files_to_change>
+    <file>backend/app/core/config.py</file>
+    <file>infra/.env.production.example</file>
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="backend/app/core/config.py">
+      Add model_validator AFTER all fields are defined.
+      Import: from pydantic import model_validator
+
+      <code><![CDATA[
+from pydantic import ConfigDict, model_validator
+from pydantic_settings import BaseSettings
+from pathlib import Path
+
+
+class Settings(BaseSettings):
+    model_config = ConfigDict(env_file=".env", protected_namespaces=("settings_",))
+
+    app_name: str = "Fastener CAD Platform"
+    environment: str = "local"
+    database_url: str = "sqlite:///./storage/app.db"
+    artifact_base_dir: Path = Path("storage/artifacts")
+    raw_asset_base_dir: Path = Path("storage/raw-assets")
+    public_artifact_prefix: str = "/artifacts"
+    public_raw_asset_prefix: str = "/raw-assets"
+    storage_backend: str = "local"
+    s3_bucket: str | None = None
+    redis_url: str | None = None
+    cad_backend: str = "mock"
+    template_version: str = "cadquery-glb-v1"
+    model_sync_generation: bool = True
+    request_id_header: str = "X-Request-ID"
+    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    admin_api_key: str | None = None
+    admin_api_key_header: str = "X-Admin-API-Key"
+    auto_create_schema: bool = True
+    require_redis_for_ready: bool = False
+    max_upload_bytes: int = 100 * 1024 * 1024
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _validate_production_safety(self) -> "Settings":
+        if self.environment != "production":
+            return self
+        errors: list[str] = []
+        if self.cad_backend == "mock":
+            errors.append(
+                "CAD_BACKEND=mock is forbidden in production. "
+                "Set CAD_BACKEND=cadquery."
+            )
+        if self.auto_create_schema:
+            errors.append(
+                "AUTO_CREATE_SCHEMA=true is forbidden in production. "
+                "Run: python -m alembic upgrade head"
+            )
+        if not self.require_redis_for_ready:
+            errors.append(
+                "REQUIRE_REDIS_FOR_READY=false is forbidden in production. "
+                "Multi-instance deployments will split-brain without Redis."
+            )
+        if not self.admin_api_key:
+            errors.append(
+                "ADMIN_API_KEY must be set in production. "
+                "Generate with: openssl rand -hex 32"
+            )
+        if errors:
+            raise ValueError(
+                "Unsafe production configuration:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+        return self
+
+
+settings = Settings()
+      ]]></code>
+    </step>
+
+    <step id="2" file="infra/.env.production.example">
+      Create production env template. Never commit real values.
+      <code><![CDATA[
+# ── App ────────────────────────────────────────────────────────────────
+ENVIRONMENT=production
+CAD_BACKEND=cadquery
+MODEL_SYNC_GENERATION=false
+AUTO_CREATE_SCHEMA=false
+REQUIRE_REDIS_FOR_READY=true
+TEMPLATE_VERSION=cadquery-glb-v1
+
+# ── Database ────────────────────────────────────────────────────────────
+DATABASE_URL=postgresql+psycopg://mecsu:CHANGE_ME@postgres:5432/mecsu_cad
+POSTGRES_DB=mecsu_cad
+POSTGRES_USER=mecsu
+POSTGRES_PASSWORD=CHANGE_ME_strong_password
+
+# ── Redis ───────────────────────────────────────────────────────────────
+REDIS_URL=redis://:CHANGE_ME_redis_password@redis:6379/0
+REDIS_PASSWORD=CHANGE_ME_redis_password
+
+# ── Storage (MinIO self-hosted / AWS S3) ────────────────────────────────
+STORAGE_BACKEND=s3
+S3_BUCKET=mecsu-geometry-cache
+AWS_ACCESS_KEY_ID=CHANGE_ME
+AWS_SECRET_ACCESS_KEY=CHANGE_ME
+# For MinIO (local): uncomment the line below
+# AWS_ENDPOINT_URL=http://minio:9000
+MINIO_ROOT_USER=CHANGE_ME
+MINIO_ROOT_PASSWORD=CHANGE_ME_minio_password
+
+# ── Security ────────────────────────────────────────────────────────────
+# Generate: openssl rand -hex 32
+ADMIN_API_KEY=CHANGE_ME_32_char_minimum
+CORS_ALLOW_ORIGINS=https://mecsu.vn,https://www.mecsu.vn
+
+# ── Limits ──────────────────────────────────────────────────────────────
+MAX_UPLOAD_BYTES=104857600
+
+# ── Artifacts public URL ────────────────────────────────────────────────
+PUBLIC_ARTIFACT_PREFIX=https://api.mecsu.vn/artifacts
+PUBLIC_RAW_ASSET_PREFIX=https://api.mecsu.vn/raw-assets
+      ]]></code>
+    </step>
+  </implementation>
+
+  <tests file="backend/tests/test_production_hardening_v2.py" append="true">
+    <code><![CDATA[
+import pytest
+from app.core.config import Settings
+
+
+def test_production_rejects_mock_backend():
+    with pytest.raises(ValueError, match="CAD_BACKEND=mock"):
+        Settings(
+            environment="production",
+            cad_backend="mock",
+            auto_create_schema=False,
+            require_redis_for_ready=True,
+            admin_api_key="x" * 32,
+            redis_url="redis://localhost:6379",
+            database_url="postgresql+psycopg://u:p@h/d",
+        )
+
+
+def test_production_rejects_auto_create_schema():
+    with pytest.raises(ValueError, match="AUTO_CREATE_SCHEMA"):
+        Settings(
+            environment="production",
+            cad_backend="cadquery",
+            auto_create_schema=True,
+            require_redis_for_ready=True,
+            admin_api_key="x" * 32,
+            redis_url="redis://localhost:6379",
+            database_url="postgresql+psycopg://u:p@h/d",
+        )
+
+
+def test_production_rejects_require_redis_false():
+    with pytest.raises(ValueError, match="REQUIRE_REDIS_FOR_READY"):
+        Settings(
+            environment="production",
+            cad_backend="cadquery",
+            auto_create_schema=False,
+            require_redis_for_ready=False,
+            admin_api_key="x" * 32,
+            redis_url="redis://localhost:6379",
+            database_url="postgresql+psycopg://u:p@h/d",
+        )
+
+
+def test_production_rejects_missing_admin_key():
+    with pytest.raises(ValueError, match="ADMIN_API_KEY"):
+        Settings(
+            environment="production",
+            cad_backend="cadquery",
+            auto_create_schema=False,
+            require_redis_for_ready=True,
+            admin_api_key=None,
+            redis_url="redis://localhost:6379",
+            database_url="postgresql+psycopg://u:p@h/d",
+        )
+
+
+def test_production_accepts_valid_config():
+    s = Settings(
+        environment="production",
+        cad_backend="cadquery",
+        auto_create_schema=False,
+        require_redis_for_ready=True,
+        admin_api_key="a" * 32,
+        redis_url="redis://localhost:6379",
+        database_url="postgresql+psycopg://u:p@h/d",
+    )
+    assert s.environment == "production"
+
+
+def test_local_allows_defaults():
+    s = Settings(environment="local")
+    assert s.cad_backend == "mock"
+    assert s.auto_create_schema is True
+    ]]></code>
+  </tests>
+
+  <commit_message>fix(T01): production config guard — fail fast on unsafe defaults</commit_message>
+  <definition_of_done>
+    - Settings(environment="production", cad_backend="mock") raises ValueError
+    - Settings(environment="production", auto_create_schema=True) raises ValueError
+    - Settings(environment="production", require_redis_for_ready=False) raises ValueError
+    - Settings(environment="production", admin_api_key=None) raises ValueError
+    - Settings(environment="local") works with defaults
+    - infra/.env.production.example exists with all required keys
+    - All tests in test_production_hardening_v2.py pass
+  </definition_of_done>
+</task>

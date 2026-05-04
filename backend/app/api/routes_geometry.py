@@ -9,6 +9,7 @@ from app.services.artifact_service import artifact_service
 from app.services.hash_service import stable_params_hash
 from app.services.model_resolver import model_resolver
 from app.services.product_service import product_service
+from app.workers.tasks import AsyncDispatchUnavailable
 
 router = APIRouter(prefix="/geometry", tags=["geometry"])
 
@@ -35,14 +36,17 @@ def _resolve_geometry(
 
     resolver_params = _params_for_lod(params, lod)
     params_hash = stable_params_hash(product_id, settings.template_version, "preview", "glb", resolver_params)
-    resolved = model_resolver.resolve(
-        ModelResolveRequest(
-            product_id=product_id,
-            params=resolver_params,
-            format="glb",
-            quality="preview",
+    try:
+        resolved = model_resolver.resolve(
+            ModelResolveRequest(
+                product_id=product_id,
+                params=resolver_params,
+                format="glb",
+                quality="preview",
+            )
         )
-    )
+    except AsyncDispatchUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     _record_cache_metrics(http_request, resolved.cache)
     if resolved.status == "queued":
         http_request.app.state.metrics["cad_platform_jobs_queued_total"] += 1

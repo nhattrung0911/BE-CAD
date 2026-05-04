@@ -2,6 +2,7 @@ import io
 
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine
 from app.main import app
 from app.repositories.artifacts import ArtifactRepository
@@ -104,15 +105,29 @@ def test_resolver_prefers_registered_vendor_asset_for_exact_format():
 
 
 def test_engineering_generation_is_queued_when_no_cached_or_vendor_asset():
-    response = client.post(
-        "/api/v1/models/resolve",
-        json={
-            "product_id": "hex-bolt-iso4014",
-            "params": {"d": 8, "L": 40, "P": 1.25, "k": 5.3, "s": 13, "b": 22},
-            "format": "step",
-            "quality": "engineering",
-        },
-    )
+    from app.workers import tasks as worker_tasks
+
+    original_redis = settings.redis_url
+    original_ensure = worker_tasks.ensure_async_dispatch_available
+    original_dispatch = worker_tasks.dispatch_generation_job
+    settings.redis_url = "redis://fake"
+    worker_tasks.ensure_async_dispatch_available = lambda: None
+    worker_tasks.dispatch_generation_job = lambda queue_name, job_id: None
+
+    try:
+        response = client.post(
+            "/api/v1/models/resolve",
+            json={
+                "product_id": "hex-bolt-iso4014",
+                "params": {"d": 8, "L": 40, "P": 1.25, "k": 5.3, "s": 13, "b": 22},
+                "format": "step",
+                "quality": "engineering",
+            },
+        )
+    finally:
+        settings.redis_url = original_redis
+        worker_tasks.ensure_async_dispatch_available = original_ensure
+        worker_tasks.dispatch_generation_job = original_dispatch
 
     assert response.status_code == 200
     body = response.json()

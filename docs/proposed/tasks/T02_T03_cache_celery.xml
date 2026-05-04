@@ -1,0 +1,415 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tasks>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T02" priority="BLOCKER" category="cache">
+  <title>Fix InMemoryCache TTL — prevent OOM memory leak</title>
+  <why>
+    InMemoryCache.set() accepts ttl_seconds but ignores it entirely.
+    cache.set() calls in model_resolver.py never pass ttl_seconds.
+    After 24h production: cache grows unbounded → OOM kill → downtime.
+    Also: RedisCache falls back silently to InMemoryCache on connect error
+    even when REQUIRE_REDIS_FOR_READY=true. This must be an explicit error.
+  </why>
+
+  <files_to_change>
+    <file>backend/app/services/cache_service.py</file>
+    <file>backend/app/services/model_resolver.py</file>
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="backend/app/services/cache_service.py">
+      <code><![CDATA[
+import json
+import time
+from dataclasses import dataclass, field
+from threading import Lock
+from typing import Any
+
+from app.core.config import settings
+
+# Default TTL for model geometry cache: 24 hours
+MODEL_CACHE_TTL = 86_400
+# Lock TTL must be longer than worst-case CadQuery generation
+LOCK_TTL_SECONDS = 120
+
+
+@dataclass
+class LockToken:
+    key: str
+    backend: str = "memory"
+
+
+@dataclass
+class _CacheEntry:
+    value: Any
+    expires_at: float | None  # monotonic clock; None = no expiry
+
+
+class InMemoryCache:
+    """
+    TTL-aware in-memory cache using monotonic clock.
+    Thread-safe. Used for local dev and as fallback for tests.
+    NEVER used as fallback when REQUIRE_REDIS_FOR_READY=true.
+    """
+
+    def __init__(self) -> None:
+        self._data: dict[str, _CacheEntry] = {}
+        self._locks: set[str] = set()
+        self._mutex = Lock()
+
+    def get(self, key: str) -> Any | None:
+        with self._mutex:
+            entry = self._data.get(key)
+            if entry is None:
+                return None
+            if entry.expires_at is not None and time.monotonic() > entry.expires_at:
+                del self._data[key]
+                return None
+            return entry.value
+
+    def set(self, key: str, value: Any, ttl_seconds: int | None = MODEL_CACHE_TTL) -> None:
+        expires_at = (
+            time.monotonic() + ttl_seconds if ttl_seconds is not None else None
+        )
+        with self._mutex:
+            self._data[key] = _CacheEntry(value=value, expires_at=expires_at)
+
+    def acquire_lock(self, key: str, ttl_seconds: int = LOCK_TTL_SECONDS) -> LockToken | None:
+        with self._mutex:
+            if key in self._locks:
+                return None
+            self._locks.add(key)
+            return LockToken(key=key, backend="memory")
+
+    def release_lock(self, token: LockToken) -> None:
+        with self._mutex:
+            self._locks.discard(token.key)
+
+    def clear(self) -> None:
+        with self._mutex:
+            self._data.clear()
+            self._locks.clear()
+
+    def is_connected(self) -> bool:
+        return False
+
+
+class RedisCache:
+    """
+    Redis-backed cache with InMemoryCache fallback for local dev only.
+    When REQUIRE_REDIS_FOR_READY=true, fallback is disabled — errors propagate.
+    """
+
+    def __init__(self, url: str, fallback: InMemoryCache) -> None:
+        self.fallback = fallback
+        self._strict = settings.require_redis_for_ready
+        self.client = None
+        try:
+            import redis
+            client = redis.Redis.from_url(url, decode_responses=False,
+                                          socket_connect_timeout=3,
+                                          socket_timeout=3)
+            client.ping()
+            self.client = client
+        except Exception as exc:
+            if self._strict:
+                raise RuntimeError(
+                    f"Redis connection failed and REQUIRE_REDIS_FOR_READY=true. "
+                    f"Cannot fall back to in-memory cache in production. "
+                    f"Error: {exc}"
+                ) from exc
+            # local dev: fall back silently
+
+    def get(self, key: str) -> Any | None:
+        if self.client is None:
+            return self.fallback.get(key)
+        raw = self.client.get(key)
+        return json.loads(raw) if raw else None
+
+    def set(self, key: str, value: Any, ttl_seconds: int | None = MODEL_CACHE_TTL) -> None:
+        if self.client is None:
+            return self.fallback.set(key, value, ttl_seconds)
+        self.client.set(key, json.dumps(value), ex=ttl_seconds)
+
+    def acquire_lock(self, key: str, ttl_seconds: int = LOCK_TTL_SECONDS) -> LockToken | None:
+        if self.client is None:
+            return self.fallback.acquire_lock(key, ttl_seconds)
+        ok = self.client.set(key, "1", nx=True, ex=ttl_seconds)
+        return LockToken(key=key, backend="redis") if ok else None
+
+    def release_lock(self, token: LockToken) -> None:
+        if self.client is None or token.backend == "memory":
+            return self.fallback.release_lock(token)
+        self.client.delete(token.key)
+
+    def clear(self) -> None:
+        if self.client is None:
+            return self.fallback.clear()
+
+    def is_connected(self) -> bool:
+        if self.client is None:
+            return False
+        try:
+            return bool(self.client.ping())
+        except Exception:
+            return False
+
+
+def _build_cache():
+    mem = InMemoryCache()
+    if settings.redis_url:
+        return RedisCache(settings.redis_url, mem)
+    return mem
+
+
+cache = _build_cache()
+      ]]></code>
+    </step>
+
+    <step id="2" file="backend/app/services/model_resolver.py">
+      Add ttl_seconds to every cache.set() call. Import MODEL_CACHE_TTL.
+      <patch><![CDATA[
+# Add import at top:
+from app.services.cache_service import cache, MODEL_CACHE_TTL
+
+# Replace all bare cache.set() calls:
+# OLD: cache.set(cache_key, {...})
+# NEW: cache.set(cache_key, {...}, ttl_seconds=MODEL_CACHE_TTL)
+
+# Three places to patch:
+# 1. After DB artifact found:
+cache.set(cache_key, {"artifact": artifact_response.model_dump(), "source": "cache_db"}, ttl_seconds=MODEL_CACHE_TTL)
+
+# 2. After vendor asset found:
+cache.set(cache_key, {"artifact": artifact_response.model_dump(), "source": "vendor_exact"}, ttl_seconds=MODEL_CACHE_TTL)
+
+# 3. After inline generation:
+cache.set(cache_key, {"artifact": artifact_response, "source": "generated_parametric"}, ttl_seconds=MODEL_CACHE_TTL)
+      ]]></patch>
+    </step>
+  </implementation>
+
+  <tests file="backend/tests/test_production_hardening_v2.py" append="true">
+    <code><![CDATA[
+import time
+from app.services.cache_service import InMemoryCache, MODEL_CACHE_TTL
+
+
+def test_in_memory_cache_ttl_expires_entry():
+    c = InMemoryCache()
+    c.set("k", "v", ttl_seconds=1)
+    assert c.get("k") == "v"
+    time.sleep(1.05)
+    assert c.get("k") is None
+
+
+def test_in_memory_cache_no_ttl_persists():
+    c = InMemoryCache()
+    c.set("k", "v", ttl_seconds=None)
+    assert c.get("k") == "v"
+
+
+def test_in_memory_cache_expired_key_removed():
+    c = InMemoryCache()
+    c.set("k", "v", ttl_seconds=1)
+    time.sleep(1.05)
+    c.get("k")  # trigger eviction
+    assert "k" not in c._data
+
+
+def test_in_memory_cache_default_ttl_is_24h():
+    c = InMemoryCache()
+    c.set("k", "v")  # no explicit ttl_seconds
+    entry = c._data["k"]
+    # expires_at should be about 86400s from now
+    remaining = entry.expires_at - time.monotonic()
+    assert 86390 < remaining <= 86400
+
+
+def test_model_cache_ttl_constant_is_24h():
+    assert MODEL_CACHE_TTL == 86_400
+    ]]></code>
+  </tests>
+
+  <commit_message>fix(T02): InMemoryCache TTL — prevent OOM + explicit TTL on all cache.set() calls</commit_message>
+</task>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T03" priority="BLOCKER" category="workers">
+  <title>Fix Celery broker — fail-fast, no silent memory fallback</title>
+  <why>
+    workers/tasks.py uses `broker=settings.redis_url or "memory://"`.
+    If REDIS_URL is not set, Celery uses in-process memory broker silently.
+    All queued jobs are lost on container restart. No warning is logged.
+    Fix: lazy init that raises loudly if Redis missing when dispatch is called.
+  </why>
+
+  <files_to_change>
+    <file>backend/app/workers/tasks.py</file>
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="backend/app/workers/tasks.py">
+      <code><![CDATA[
+"""
+Celery task definitions and dispatch helpers.
+
+Production requirement: REDIS_URL must be set.
+Local dev without Redis: set MODEL_SYNC_GENERATION=true to avoid dispatch.
+"""
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from app.core.config import settings
+
+if TYPE_CHECKING:
+    from celery import Celery
+
+logger = logging.getLogger(__name__)
+
+_celery_app: "Celery | None" = None
+
+TASK_ROUTES = {
+    "app.workers.tasks.run_generation_job": {"queue": "preview_fast"},
+}
+
+
+def get_celery_app() -> "Celery":
+    """
+    Lazy init. Raises RuntimeError if REDIS_URL not configured.
+    This prevents silent job loss from memory:// broker.
+    """
+    global _celery_app
+    if _celery_app is not None:
+        return _celery_app
+
+    if not settings.redis_url:
+        raise RuntimeError(
+            "REDIS_URL is required for Celery workers. "
+            "Set REDIS_URL in environment variables. "
+            "For local dev without Redis, use MODEL_SYNC_GENERATION=true "
+            "to run generation inline (not queued)."
+        )
+
+    try:
+        from celery import Celery
+    except ImportError as exc:
+        raise RuntimeError("celery package is required: pip install celery") from exc
+
+    app = Celery(
+        "fastener_cad",
+        broker=settings.redis_url,
+        backend=settings.redis_url,
+    )
+    app.conf.update(
+        task_serializer="json",
+        result_serializer="json",
+        accept_content=["json"],
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
+        worker_prefetch_multiplier=1,
+        task_routes={
+            "app.workers.tasks.run_generation_job_task": {
+                "queue": "preview_fast"
+            },
+        },
+        broker_connection_retry_on_startup=True,
+    )
+    _celery_app = app
+    return app
+
+
+def dispatch_generation_job(queue_name: str, job_id: str) -> bool:
+    """
+    Dispatch a job to Celery. Returns True on success.
+    If Redis not configured: logs warning and returns False (no raise).
+    Caller decides whether to fall back to inline or return 'queued'.
+    """
+    if not settings.redis_url:
+        logger.warning(
+            "REDIS_URL not configured — skipping async dispatch of job %s "
+            "on queue %s. Set MODEL_SYNC_GENERATION=true for local dev.",
+            job_id,
+            queue_name,
+        )
+        return False
+
+    try:
+        celery_app = get_celery_app()
+        celery_app.send_task(
+            "app.workers.tasks.run_generation_job_task",
+            args=[job_id],
+            queue=queue_name,
+        )
+        return True
+    except Exception as exc:
+        logger.error("Failed to dispatch job %s: %s", job_id, exc)
+        return False
+
+
+# ── Celery task (only bound when celery is running) ─────────────────────
+try:
+    _app = get_celery_app()
+
+    @_app.task(name="app.workers.tasks.run_generation_job_task", bind=True, max_retries=3)
+    def run_generation_job_task(self, job_id: str) -> dict:
+        from app.services.job_runner import run_model_generation_job
+        try:
+            return run_model_generation_job(job_id)
+        except Exception as exc:
+            raise self.retry(exc=exc, countdown=10)
+
+except RuntimeError:
+    # Redis not configured — task not bound. OK for local dev.
+    pass
+
+
+def reset_celery_for_testing() -> None:
+    """Reset cached celery app — use in test teardown only."""
+    global _celery_app
+    _celery_app = None
+      ]]></code>
+    </step>
+  </implementation>
+
+  <tests file="backend/tests/test_production_hardening_v2.py" append="true">
+    <code><![CDATA[
+import logging
+from app.workers.tasks import dispatch_generation_job, get_celery_app, reset_celery_for_testing
+from app.core.config import settings
+
+
+def test_dispatch_without_redis_logs_warning_not_raises(caplog):
+    original = settings.redis_url
+    settings.redis_url = None
+    reset_celery_for_testing()
+    try:
+        with caplog.at_level(logging.WARNING, logger="app.workers.tasks"):
+            result = dispatch_generation_job("preview_fast", "test-job-123")
+        assert result is False
+        assert "REDIS_URL not configured" in caplog.text
+    finally:
+        settings.redis_url = original
+        reset_celery_for_testing()
+
+
+def test_get_celery_app_raises_without_redis():
+    original = settings.redis_url
+    settings.redis_url = None
+    reset_celery_for_testing()
+    try:
+        with pytest.raises(RuntimeError, match="REDIS_URL is required"):
+            get_celery_app()
+    finally:
+        settings.redis_url = original
+        reset_celery_for_testing()
+    ]]></code>
+  </tests>
+
+  <commit_message>fix(T03): Celery broker fail-fast — no silent memory:// fallback</commit_message>
+</task>
+
+</tasks>

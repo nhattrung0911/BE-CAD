@@ -13,16 +13,24 @@ logger = logging.getLogger(__name__)
 _celery_app = None
 
 
+class AsyncDispatchUnavailable(RuntimeError):
+    pass
+
+
+def ensure_async_dispatch_available() -> None:
+    if not settings.redis_url:
+        raise AsyncDispatchUnavailable(
+            "REDIS_URL is required for async generation. Set REDIS_URL or use MODEL_SYNC_GENERATION=true for local dev."
+        )
+    if Celery is None:
+        raise AsyncDispatchUnavailable("celery package is required for async generation")
+
+
 def get_celery_app():
     global _celery_app
     if _celery_app is not None:
         return _celery_app
-    if not settings.redis_url:
-        raise RuntimeError(
-            "REDIS_URL is required for Celery. Set REDIS_URL or use MODEL_SYNC_GENERATION=true for local dev."
-        )
-    if Celery is None:
-        raise RuntimeError("celery package is required")
+    ensure_async_dispatch_available()
     _celery_app = Celery(
         "fastener_cad",
         broker=settings.redis_url,
@@ -69,9 +77,7 @@ def run_generation_job(job_id: str) -> dict:
 
 
 def dispatch_generation_job(queue_name: str, job_id: str) -> None:
-    if not settings.redis_url:
-        logger.warning("No REDIS_URL configured - skipping async dispatch of job %s", job_id)
-        return
+    ensure_async_dispatch_available()
     app = get_celery_app()
     task_by_queue = {
         QUEUE_PREVIEW_FAST: generate_preview,
@@ -80,6 +86,4 @@ def dispatch_generation_job(queue_name: str, job_id: str) -> None:
         QUEUE_BATCH_PREGENERATE: generate_cad,
     }
     task = task_by_queue[queue_name]
-    if app is None:
-        return
     task.apply_async(args=[job_id], queue=queue_name)

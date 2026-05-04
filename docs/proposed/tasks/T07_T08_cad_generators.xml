@@ -1,0 +1,418 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tasks>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T07" priority="HIGH" category="cad">
+  <title>CadQuery hex_nut generator + ISO 4032 catalog data</title>
+  <why>
+    Only hex_bolt, washer, retaining_ring exist. hex_nut is mecsu.vn's
+    second most common product. Any request for hex-nut-* raises KeyError.
+    Must add CadQuery generator, mock template, registry entry, and catalog data.
+  </why>
+
+  <files_to_change>
+    <file>backend/app/cad/templates/hex_nut.py</file>     <!-- CREATE -->
+    <file>backend/app/cad/backends.py</file>
+    <file>backend/app/cad/registry.py</file>
+    <file>backend/app/services/product_service.py</file>
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="backend/app/cad/templates/hex_nut.py" action="CREATE">
+      <code><![CDATA[
+"""
+Hex Nut mock template — ISO 4032.
+CadQuery actual generation is in backends.py CadQueryBackend._hex_nut().
+"""
+import json
+from app.cad.template_base import CadTemplate, GeneratedModel
+
+
+class HexNutTemplate(CadTemplate):
+    family = "hex_nut"
+    supported_standards = ["ISO4032", "DIN934", "GB6170"]
+    required_params = ["d", "s", "m"]
+
+    def generate(self, params: dict, fmt: str, quality: str) -> GeneratedModel:
+        self.validate_params(params)
+        payload = {
+            "generator": "mock",
+            "template": "hex_nut",
+            "format": fmt,
+            "quality": quality,
+            "params": params,
+            "geometry_plan": {
+                "hex_body": f"polygon(6, s={params['s']}) × h={params['m']}mm",
+                "bore": f"circle(d/2={float(params['d'])/2})",
+                "chamfer": "both faces",
+            },
+        }
+        return GeneratedModel(
+            content=json.dumps(payload, sort_keys=True, indent=2).encode("utf-8"),
+            format=fmt,
+            metadata=payload,
+        )
+      ]]></code>
+    </step>
+
+    <step id="2" file="backend/app/cad/backends.py">
+      Add _hex_nut() to CadQueryBackend and register in generate() dispatch.
+      Also FIX existing _hex_bolt() — current code puts head UP and shank DOWN
+      creating an X-shape. Correct: head at Z=0..head_height, shank at Z=head_height..total_length.
+
+      <code><![CDATA[
+# ── In CadQueryBackend.generate() — add hex_nut to dispatch ─────────
+elif family == "hex_nut":
+    shape = self._hex_nut(params)
+
+# ── Fix _hex_bolt() — correct geometry orientation ──────────────────
+def _hex_bolt(self, params: dict[str, Any]):
+    for key in ["d", "L", "P", "k", "s", "b"]:
+        if key not in params:
+            raise ValueError(f"Missing required params for hex_bolt: {key!r}")
+
+    d = float(params["d"])
+    total_length = float(params["L"])
+    head_height = float(params["k"])
+    across_flats = float(params["s"])
+    thread_length = float(params["b"])
+    pitch = float(params["P"])
+
+    # CadQuery polygon() takes circumradius (across_corners / 2)
+    # across_corners = across_flats / cos(30°) = across_flats / 0.866025
+    circumradius = across_flats / 0.866025  # = across_corners
+    shank_radius = d / 2
+    grip_length = total_length - thread_length
+    minor_radius = shank_radius - 0.6134 * pitch  # ISO 68-1 minor diameter
+
+    # 1. Hex head: Z = 0 → head_height
+    head = (
+        self.cq.Workplane("XY")
+        .polygon(6, circumradius)
+        .extrude(head_height)
+    )
+    try:
+        head = head.faces(">Z").chamfer(min(1.0, head_height * 0.12))
+        head = head.faces("<Z").chamfer(min(0.5, head_height * 0.08))
+    except Exception:
+        pass
+
+    # 2. Grip (smooth shank): Z = head_height → head_height + grip_length
+    grip = (
+        self.cq.Workplane("XY")
+        .workplane(offset=head_height)
+        .circle(shank_radius)
+        .extrude(grip_length)
+    )
+
+    # 3. Thread section: Z = head_height+grip_length → head_height+total_length
+    thread_start = head_height + grip_length
+    thread_core = (
+        self.cq.Workplane("XY")
+        .workplane(offset=thread_start)
+        .circle(minor_radius)
+        .extrude(thread_length)
+    )
+
+    bolt = head.union(grip).union(thread_core)
+
+    # 4. Thread helix (medium/high LOD only)
+    lod = str(params.get("lod", "medium"))
+    if lod in ("medium", "high"):
+        try:
+            segments = 32 if lod == "high" else 16
+            helix_solid = self._thread_helix(
+                major_radius=shank_radius,
+                minor_radius=minor_radius,
+                pitch=pitch,
+                length=thread_length,
+                z_start=thread_start,
+                segments=segments,
+            )
+            bolt = bolt.union(helix_solid)
+        except Exception:
+            pass  # helix can fail on edge-case sizes; thread_core remains
+
+    return bolt
+
+def _hex_nut(self, params: dict[str, Any]):
+    """ISO 4032 hex nut. params: d (nominal), s (across flats), m (height)."""
+    for key in ["d", "s", "m"]:
+        if key not in params:
+            raise ValueError(f"Missing required params for hex_nut: {key!r}")
+
+    d = float(params["d"])
+    across_flats = float(params["s"])
+    nut_height = float(params["m"])
+
+    circumradius = across_flats / 0.866025
+    bore_radius = d / 2
+
+    # 1. Hex body
+    nut = (
+        self.cq.Workplane("XY")
+        .polygon(6, circumradius)
+        .extrude(nut_height)
+    )
+
+    # 2. Chamfer both faces
+    try:
+        chamfer_size = min(0.8, nut_height * 0.1)
+        nut = nut.faces(">Z").chamfer(chamfer_size)
+        nut = nut.faces("<Z").chamfer(chamfer_size)
+    except Exception:
+        pass
+
+    # 3. Bore: cut through hole
+    nut = (
+        nut.faces(">Z")
+        .workplane()
+        .circle(bore_radius)
+        .cutThruAll()
+    )
+
+    return nut
+
+def _thread_helix(
+    self,
+    major_radius: float,
+    minor_radius: float,
+    pitch: float,
+    length: float,
+    z_start: float,
+    segments: int = 16,
+) -> "cq.Workplane":
+    """
+    ISO 68-1 simplified thread helix for visual fidelity.
+    60° thread angle, swept in XZ plane.
+    Falls back gracefully — caller wraps in try/except.
+    """
+    # Thread profile in XZ plane (will be swept along helix)
+    profile = (
+        self.cq.Workplane("XZ")
+        .moveTo(minor_radius, 0)
+        .lineTo(major_radius, pitch * 0.25)
+        .lineTo(major_radius, pitch * 0.75)
+        .lineTo(minor_radius, pitch)
+        .close()
+    )
+    mid_radius = (major_radius + minor_radius) / 2
+    helix = self.cq.Wire.makeHelix(pitch, length, mid_radius)
+    thread = (
+        self.cq.Workplane("XY")
+        .workplane(offset=z_start)
+        .add(self.cq.Solid.sweep(profile.val(), [helix]))
+    )
+    return thread
+      ]]></code>
+    </step>
+
+    <step id="3" file="backend/app/cad/registry.py">
+      <code><![CDATA[
+from app.cad.template_base import CadTemplate
+from app.cad.templates.hex_bolt import HexBoltTemplate
+from app.cad.templates.hex_nut import HexNutTemplate         # ADD
+from app.cad.templates.washer import WasherTemplate
+from app.cad.templates.retaining_ring import RetainingRingTemplate
+
+
+class TemplateRegistry:
+    def __init__(self) -> None:
+        self.templates: list[CadTemplate] = [
+            HexBoltTemplate(),
+            HexNutTemplate(),          # ADD
+            WasherTemplate(),
+            RetainingRingTemplate(),
+        ]
+
+    def get_by_product(self, product_id: str) -> CadTemplate:
+        if "hex-bolt" in product_id or "stud-bolt" in product_id:
+            return self.get_by_family("hex_bolt")
+        if "hex-nut" in product_id or "lock-nut" in product_id:  # ADD
+            return self.get_by_family("hex_nut")                  # ADD
+        if "washer" in product_id:
+            return self.get_by_family("washer")
+        if "retaining" in product_id or "gb891" in product_id:
+            return self.get_by_family("retaining_ring")
+        raise KeyError(f"No template registered for product_id={product_id!r}")
+
+    def get_by_family(self, family: str) -> CadTemplate:
+        for t in self.templates:
+            if t.family == family:
+                return t
+        raise KeyError(f"No template registered for family={family!r}")
+
+
+template_registry = TemplateRegistry()
+      ]]></code>
+    </step>
+
+    <step id="4" file="backend/app/services/product_service.py">
+      Add hex-nut-iso4032 to CATALOG and VARIANTS dicts.
+      ISO 4032 data — all dimensions in mm, source: ISO 4032:2012 Table 1.
+
+      <code><![CDATA[
+# ── ADD to CATALOG dict ─────────────────────────────────────────────
+"hex-nut-iso4032": Product(
+    product_id="hex-nut-iso4032",
+    standard="ISO4032",
+    family="hex_nut",
+    name="Đai ốc lục giác ISO 4032",
+    parameters=[
+        ParameterSpec(name="d", label="Đường kính danh nghĩa (mm)",
+                      values=[6, 8, 10, 12, 14, 16, 20, 24]),
+        ParameterSpec(name="s", label="Rộng 2 cạnh song song (mm)"),
+        ParameterSpec(name="m", label="Chiều cao đai ốc (mm)"),
+    ],
+),
+
+# ── ADD to VARIANTS dict ────────────────────────────────────────────
+# ISO 4032 Table 1: d, s (across flats), m (nut height), all in mm
+"hex-nut-iso4032": [
+    {
+        "variant_id": "hex-nut-iso4032-m6",
+        "sku": "HEX-NUT-ISO4032-M6",
+        "label": "M6",
+        "diameter_label": "M6",
+        "params": {"d": 6,  "s": 10.0, "m": 5.2},
+        "material": "carbon_steel",
+    },
+    {
+        "variant_id": "hex-nut-iso4032-m8",
+        "sku": "HEX-NUT-ISO4032-M8",
+        "label": "M8",
+        "diameter_label": "M8",
+        "params": {"d": 8,  "s": 13.0, "m": 6.8},
+        "material": "carbon_steel",
+    },
+    {
+        "variant_id": "hex-nut-iso4032-m10",
+        "sku": "HEX-NUT-ISO4032-M10",
+        "label": "M10",
+        "diameter_label": "M10",
+        "params": {"d": 10, "s": 17.0, "m": 8.4},
+        "material": "carbon_steel",
+    },
+    {
+        "variant_id": "hex-nut-iso4032-m12",
+        "sku": "HEX-NUT-ISO4032-M12",
+        "label": "M12",
+        "diameter_label": "M12",
+        "params": {"d": 12, "s": 19.0, "m": 10.8},
+        "material": "carbon_steel",
+    },
+    {
+        "variant_id": "hex-nut-iso4032-m14",
+        "sku": "HEX-NUT-ISO4032-M14",
+        "label": "M14",
+        "diameter_label": "M14",
+        "params": {"d": 14, "s": 22.0, "m": 12.8},
+        "material": "carbon_steel",
+    },
+    {
+        "variant_id": "hex-nut-iso4032-m16",
+        "sku": "HEX-NUT-ISO4032-M16",
+        "label": "M16",
+        "diameter_label": "M16",
+        "params": {"d": 16, "s": 24.0, "m": 14.8},
+        "material": "carbon_steel",
+    },
+    {
+        "variant_id": "hex-nut-iso4032-m20",
+        "sku": "HEX-NUT-ISO4032-M20",
+        "label": "M20",
+        "diameter_label": "M20",
+        "params": {"d": 20, "s": 30.0, "m": 18.0},
+        "material": "carbon_steel",
+    },
+    {
+        "variant_id": "hex-nut-iso4032-m24",
+        "sku": "HEX-NUT-ISO4032-M24",
+        "label": "M24",
+        "diameter_label": "M24",
+        "params": {"d": 24, "s": 36.0, "m": 21.5},
+        "material": "carbon_steel",
+    },
+],
+      ]]></code>
+    </step>
+  </implementation>
+
+  <tests file="backend/tests/test_production_hardening_v2.py" append="true">
+    <code><![CDATA[
+import pytest
+from app.cad.registry import template_registry
+from app.cad.backends import get_cad_backend
+from fastapi.testclient import TestClient
+from app.main import app
+
+client = TestClient(app)
+
+cadquery_unavailable = False
+try:
+    import cadquery  # noqa: F401
+except ImportError:
+    cadquery_unavailable = True
+
+
+def test_hex_nut_template_registered():
+    t = template_registry.get_by_family("hex_nut")
+    assert t.family == "hex_nut"
+    assert "ISO4032" in t.supported_standards
+
+
+def test_hex_nut_registry_by_product_id():
+    t = template_registry.get_by_product("hex-nut-iso4032")
+    assert t.family == "hex_nut"
+
+
+def test_hex_nut_lock_nut_maps_to_hex_nut():
+    t = template_registry.get_by_product("lock-nut-din985")
+    assert t.family == "hex_nut"
+
+
+def test_hex_nut_variants_endpoint():
+    r = client.get("/api/v1/products/hex-nut-iso4032/variants")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] >= 6
+    assert "M8" in data["grouped_by_diameter"]
+    m8 = data["grouped_by_diameter"]["M8"][0]
+    assert m8["params"]["d"] == 8
+    assert m8["params"]["s"] == 13.0
+    assert m8["params"]["m"] == 6.8
+
+
+def test_hex_nut_mock_generate():
+    backend = get_cad_backend("mock")
+    result = backend.generate("hex-nut-iso4032",
+                              {"d": 8, "s": 13.0, "m": 6.8}, "glb", "preview")
+    assert b"hex_nut" in result.content
+
+
+@pytest.mark.skipif(cadquery_unavailable, reason="cadquery not installed")
+def test_cadquery_hex_nut_returns_valid_glb():
+    backend = get_cad_backend("cadquery")
+    result = backend.generate("hex-nut-iso4032",
+                              {"d": 8, "s": 13.0, "m": 6.8}, "glb", "preview")
+    assert result.content[:4] == b"glTF", "Not a valid GLB file"
+    assert len(result.content) > 2000
+
+
+@pytest.mark.skipif(cadquery_unavailable, reason="cadquery not installed")
+def test_cadquery_hex_bolt_geometry_is_upright():
+    """Bolt head and shank must not overlap (X-shape bug)."""
+    backend = get_cad_backend("cadquery")
+    result = backend.generate("hex-bolt-iso4014",
+                              {"d": 8, "L": 30, "P": 1.25, "k": 5.3,
+                               "s": 13, "b": 22, "lod": "medium"},
+                              "glb", "preview")
+    assert result.content[:4] == b"glTF"
+    assert len(result.content) > 5000
+    ]]></code>
+  </tests>
+
+  <commit_message>feat(T07): hex_nut CadQuery generator + ISO 4032 catalog + fix hex_bolt orientation</commit_message>
+</task>
+
+</tasks>

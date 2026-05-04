@@ -1,7 +1,9 @@
 from fastapi.testclient import TestClient
 from pathlib import Path
 import logging
+import sys
 import time
+import pytest
 
 from app.core.config import Settings, settings
 from app.core.database import Base, engine, should_auto_create_schema
@@ -23,8 +25,10 @@ def setup_function():
     Base.metadata.create_all(bind=engine)
     settings.environment = "local"
     settings.admin_api_key = None
+    settings.model_sync_generation = True
     settings.auto_create_schema = True
     settings.require_redis_for_ready = False
+    settings.redis_url = None
     settings.max_upload_bytes = 100 * 1024 * 1024
 
 
@@ -130,8 +134,10 @@ def test_production_settings_reject_mock_backend():
         Settings(
             environment="production",
             cad_backend="mock",
+            model_sync_generation=False,
             auto_create_schema=False,
             require_redis_for_ready=True,
+            admin_api_key="x" * 32,
         )
     except ValueError as exc:
         assert "CAD_BACKEND=mock" in str(exc)
@@ -144,8 +150,10 @@ def test_production_settings_reject_auto_create_schema():
         Settings(
             environment="production",
             cad_backend="cadquery",
+            model_sync_generation=False,
             auto_create_schema=True,
             require_redis_for_ready=True,
+            admin_api_key="x" * 32,
         )
     except ValueError as exc:
         assert "AUTO_CREATE_SCHEMA=true" in str(exc)
@@ -158,13 +166,41 @@ def test_production_settings_require_redis_ready_flag():
         Settings(
             environment="production",
             cad_backend="cadquery",
+            model_sync_generation=False,
             auto_create_schema=False,
             require_redis_for_ready=False,
+            admin_api_key="x" * 32,
         )
     except ValueError as exc:
         assert "REQUIRE_REDIS_FOR_READY" in str(exc)
     else:
         raise AssertionError("Expected production settings to require Redis readiness")
+
+
+def test_production_settings_require_admin_api_key():
+    with pytest.raises(ValueError) as exc:
+        Settings(
+            environment="production",
+            cad_backend="cadquery",
+            model_sync_generation=False,
+            auto_create_schema=False,
+            require_redis_for_ready=True,
+            admin_api_key=None,
+        )
+    assert "ADMIN_API_KEY" in str(exc.value)
+
+
+def test_production_settings_require_async_generation_disabled():
+    with pytest.raises(ValueError) as exc:
+        Settings(
+            environment="production",
+            cad_backend="cadquery",
+            model_sync_generation=True,
+            auto_create_schema=False,
+            require_redis_for_ready=True,
+            admin_api_key="x" * 32,
+        )
+    assert "MODEL_SYNC_GENERATION=false" in str(exc.value)
 
 
 def test_metrics_reflect_real_request_count():
@@ -227,16 +263,63 @@ def test_expired_key_removed_from_dict():
     assert "k" not in cache_impl._data
 
 
-def test_dispatch_without_redis_logs_warning_not_raises(monkeypatch):
+def test_dispatch_without_redis_raises():
     original_redis_url = settings.redis_url
     settings.redis_url = None
-    warnings = []
     try:
-        monkeypatch.setattr(worker_tasks.logger, "warning", lambda message, job_id: warnings.append((message, job_id)))
-        dispatch_generation_job("preview_fast", "test-job-123")
-        assert warnings == [("No REDIS_URL configured - skipping async dispatch of job %s", "test-job-123")]
+        with pytest.raises(RuntimeError) as exc:
+            dispatch_generation_job("preview_fast", "test-job-123")
+        assert "REDIS_URL is required" in str(exc.value)
     finally:
         settings.redis_url = original_redis_url
+
+
+def test_model_resolve_returns_503_when_async_dispatch_is_unavailable():
+    original_sync = settings.model_sync_generation
+    original_redis = settings.redis_url
+    settings.model_sync_generation = False
+    settings.redis_url = None
+    try:
+        response = client.post(
+            "/api/v1/models/resolve",
+            json={
+                "product_id": "hex-bolt-iso4014",
+                "params": {"d": 8, "L": 30, "P": 1.25, "k": 5.3, "s": 13, "b": 22},
+                "format": "glb",
+                "quality": "preview",
+            },
+        )
+        assert response.status_code == 503
+        assert "REDIS_URL is required for async generation" in response.json()["detail"]
+    finally:
+        settings.model_sync_generation = original_sync
+        settings.redis_url = original_redis
+
+
+def test_redis_cache_raises_when_strict_mode_and_connection_fails(monkeypatch):
+    from app.services.cache_service import InMemoryCache, RedisCache
+
+    original_require_redis = settings.require_redis_for_ready
+    settings.require_redis_for_ready = True
+
+    class FakeRedisClient:
+        def ping(self):
+            raise RuntimeError("boom")
+
+    class FakeRedisModule:
+        class Redis:
+            @staticmethod
+            def from_url(*args, **kwargs):
+                return FakeRedisClient()
+
+    monkeypatch.setitem(sys.modules, "redis", FakeRedisModule())
+
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            RedisCache("redis://example", InMemoryCache())
+        assert "Cannot fall back to in-memory cache" in str(exc.value)
+    finally:
+        settings.require_redis_for_ready = original_require_redis
 
 
 def test_get_celery_app_raises_without_redis():

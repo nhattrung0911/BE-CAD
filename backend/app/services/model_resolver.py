@@ -68,6 +68,9 @@ class ModelResolver:
 
         lock = cache.acquire_lock(f"lock:{cache_key}", ttl_seconds=120)
         if lock is None:
+            from app.workers.tasks import ensure_async_dispatch_available
+
+            ensure_async_dispatch_available()
             job = enqueue_generation_job(
                 queue_name=queue_for_request(request.format, request.quality),
                 product_id=request.product_id,
@@ -80,6 +83,9 @@ class ModelResolver:
 
         try:
             if not self._may_generate_inline(request):
+                from app.workers.tasks import dispatch_generation_job, ensure_async_dispatch_available
+
+                ensure_async_dispatch_available()
                 job = enqueue_generation_job(
                     queue_name=queue_for_request(request.format, request.quality),
                     product_id=request.product_id,
@@ -88,8 +94,6 @@ class ModelResolver:
                     quality=request.quality,
                     template_version=settings.template_version,
                 )
-                from app.workers.tasks import dispatch_generation_job
-
                 dispatch_generation_job(job.queue_name, job.job_id)
                 return ModelResolveResponse(status="queued", cache="miss", source="queued_parametric", job_id=job.job_id)
 
@@ -123,6 +127,10 @@ class ModelResolver:
                 source="generated_parametric",
             )
         except Exception as exc:
+            from app.workers.tasks import AsyncDispatchUnavailable
+
+            if isinstance(exc, AsyncDispatchUnavailable):
+                raise
             return ModelResolveResponse(status="failed", message=str(exc), cache="miss")
         finally:
             cache.release_lock(lock)

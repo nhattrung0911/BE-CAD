@@ -42,6 +42,14 @@ docs/                 Architecture, API, roadmap, Codex prompts, CTO tasks
 infra/                Docker, docker-compose, Nginx notes, env examples
 ```
 
+## Current vs proposed
+
+- `AGENTS.md`: current repository contract and active engineering rules.
+- `docs/current/`: snapshots of current-state reference docs when side-by-side review is useful.
+- `docs/proposed/`: proposed contracts, task specs, scratch artifacts, and tooling notes kept separate from runtime source.
+
+This separation is intentional. Proposed files are inputs for review and planning, not implicit runtime source of truth.
+
 ## Important architectural decision
 
 Do not scale one mesh to create all sizes. Exact vendor model is allowed only when size and parameters match. Otherwise use parametric templates and dimension tables.

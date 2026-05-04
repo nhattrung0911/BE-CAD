@@ -1,0 +1,427 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tasks>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T09" priority="HIGH" category="database">
+  <title>geometry_cache_metrics migration + N+1 fix</title>
+  <why>
+    No way to see which SKUs are hot vs cold → can't optimize pre-warming.
+    Also: ProductService.get_variant() iterates all products and all variants
+    on every call (O(P×V)) — must use a cached lookup dict.
+  </why>
+
+  <files_to_change>
+    <file>backend/alembic/versions/20260502_0002_geometry_cache_metrics.py</file> <!-- CREATE -->
+    <file>backend/app/db/models.py</file>
+    <file>backend/app/repositories/geometry_metrics.py</file>                     <!-- CREATE -->
+    <file>backend/app/services/product_service.py</file>
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="backend/alembic/versions/20260502_0002_geometry_cache_metrics.py" action="CREATE">
+      <code><![CDATA[
+"""geometry cache metrics
+
+Revision ID: 20260502_0002
+Revises: 20260429_0001
+Create Date: 2026-05-02
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = "20260502_0002"
+down_revision = "20260429_0001"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "geometry_cache_metrics",
+        sa.Column("params_hash", sa.String(96), nullable=False),
+        sa.Column("product_id", sa.String(128), nullable=False),
+        sa.Column("lod", sa.String(10), nullable=False),
+        sa.Column("file_size_bytes", sa.Integer(), nullable=True),
+        sa.Column("generation_ms", sa.Integer(), nullable=True),
+        sa.Column("access_count", sa.Integer(), nullable=False, server_default="1"),
+        sa.Column("last_accessed", sa.DateTime(timezone=True), nullable=False,
+                  server_default=sa.text("NOW()")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
+                  server_default=sa.text("NOW()")),
+        sa.PrimaryKeyConstraint("params_hash"),
+    )
+    # CREATE INDEX CONCURRENTLY is not supported in Alembic transactions
+    # so we use standard CREATE INDEX (table is empty at migration time)
+    op.create_index("ix_geom_metrics_product_id",
+                    "geometry_cache_metrics", ["product_id"])
+    op.create_index("ix_geom_metrics_last_accessed",
+                    "geometry_cache_metrics", ["last_accessed"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_geom_metrics_last_accessed", "geometry_cache_metrics")
+    op.drop_index("ix_geom_metrics_product_id", "geometry_cache_metrics")
+    op.drop_table("geometry_cache_metrics")
+      ]]></code>
+    </step>
+
+    <step id="2" file="backend/app/db/models.py">
+      Append GeometryCacheMetrics model:
+      <code><![CDATA[
+# Add import at top if not present:
+from datetime import UTC, datetime
+
+class GeometryCacheMetrics(Base):
+    __tablename__ = "geometry_cache_metrics"
+
+    params_hash: Mapped[str] = mapped_column(String(96), primary_key=True)
+    product_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    lod: Mapped[str] = mapped_column(String(10), nullable=False)
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    generation_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    access_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    last_accessed: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+      ]]></code>
+    </step>
+
+    <step id="3" file="backend/app/repositories/geometry_metrics.py" action="CREATE">
+      <code><![CDATA[
+"""Repository for geometry cache metrics — tracks hot SKUs."""
+from datetime import UTC, datetime
+
+from sqlalchemy.orm import Session
+
+from app.db.models import GeometryCacheMetrics
+
+
+class GeometryCacheMetricsRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def upsert(
+        self,
+        *,
+        params_hash: str,
+        product_id: str,
+        lod: str,
+        file_size_bytes: int | None = None,
+        generation_ms: int | None = None,
+    ) -> None:
+        """Upsert access record. Safe to call fire-and-forget."""
+        existing = self.session.get(GeometryCacheMetrics, params_hash)
+        if existing:
+            existing.access_count += 1
+            existing.last_accessed = datetime.now(UTC)
+            if file_size_bytes is not None:
+                existing.file_size_bytes = file_size_bytes
+        else:
+            self.session.add(
+                GeometryCacheMetrics(
+                    params_hash=params_hash,
+                    product_id=product_id,
+                    lod=lod,
+                    file_size_bytes=file_size_bytes,
+                    generation_ms=generation_ms,
+                )
+            )
+
+    def top_skus(self, limit: int = 50) -> list[GeometryCacheMetrics]:
+        """Return most-accessed geometries — for pre-warming strategy."""
+        from sqlalchemy import select, desc
+        stmt = (
+            select(GeometryCacheMetrics)
+            .order_by(desc(GeometryCacheMetrics.access_count))
+            .limit(limit)
+        )
+        return list(self.session.execute(stmt).scalars())
+      ]]></code>
+    </step>
+
+    <step id="4" file="backend/app/services/product_service.py">
+      Fix N+1: replace linear scan with cached_property dict.
+      <code><![CDATA[
+import functools
+
+# ── Replace get_variant() ────────────────────────────────────────────
+@functools.cached_property
+def _variant_lookup(self) -> dict[str, "ProductVariant"]:
+    """
+    Build once per process lifetime. O(1) lookup.
+    Catalog is immutable (in-code) — safe to cache forever.
+    When catalog moves to DB, invalidate this on reload.
+    """
+    lookup: dict[str, "ProductVariant"] = {}
+    for product_id in VARIANTS:
+        for v in self._list_variants_raw(product_id):
+            lookup[v.variant_id] = v
+    return lookup
+
+def get_variant(self, variant_id: str) -> "ProductVariant":
+    v = self._variant_lookup.get(variant_id)
+    if v is None:
+        raise KeyError(f"Variant not found: {variant_id!r}")
+    return v
+
+# rename existing implementation to _list_variants_raw
+def _list_variants_raw(self, product_id: str) -> list["ProductVariant"]:
+    # ... existing list_variants() body ...
+      ]]></code>
+    </step>
+  </implementation>
+
+  <tests file="backend/tests/test_production_hardening_v2.py" append="true">
+    <code><![CDATA[
+import time
+from app.services.product_service import product_service
+
+
+def test_get_variant_o1_lookup():
+    """get_variant must not do linear scan."""
+    start = time.monotonic()
+    for _ in range(5_000):
+        try:
+            product_service.get_variant("hex-bolt-iso4014-m8x30")
+        except KeyError:
+            pass
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.5, f"get_variant too slow for 5000 calls: {elapsed:.3f}s"
+
+
+def test_alembic_migration_0002_tables():
+    """geometry_cache_metrics table must exist after migrations."""
+    from sqlalchemy import inspect
+    from app.core.database import engine
+    inspector = inspect(engine)
+    # Only validates when using postgres (not sqlite)
+    if "postgresql" in str(engine.url):
+        assert "geometry_cache_metrics" in inspector.get_table_names()
+    ]]></code>
+  </tests>
+
+  <commit_message>feat(T09): geometry_cache_metrics migration + O(1) variant lookup</commit_message>
+</task>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T10" priority="MEDIUM" category="observability">
+  <title>Prometheus metrics format at /metrics</title>
+  <why>
+    GET /metrics returns a raw Python dict — not parseable by Prometheus.
+    Grafana/Prometheus scraper expects text/plain with # HELP and # TYPE lines.
+    Also missing: cache hit/miss counters critical for tuning pre-warm strategy.
+  </why>
+
+  <files_to_change>
+    <file>backend/app/main.py</file>
+    <file>backend/app/api/routes_metrics.py</file>  <!-- if exists, replace; else create -->
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="backend/app/main.py">
+      Update metrics state initialization to include cache counters:
+      <code><![CDATA[
+# Replace existing metrics dict:
+app.state.metrics = {
+    # Request counters
+    "cad_platform_requests_total":            0,
+    "cad_platform_request_latency_ms_total":  0,
+    # Job counters
+    "cad_platform_jobs_queued_total":         0,
+    "cad_platform_jobs_completed_total":      0,
+    "cad_platform_jobs_failed_total":         0,
+    # Cache counters (NEW)
+    "cad_platform_cache_hits_total":          0,
+    "cad_platform_cache_misses_total":        0,
+    # Generation counters (NEW)
+    "cad_platform_generate_inline_total":     0,
+    "cad_platform_generate_inline_ms_total":  0,
+}
+      ]]></code>
+    </step>
+
+    <step id="2" file="backend/app/api/routes_metrics.py">
+      Replace or create:
+      <code><![CDATA[
+"""Prometheus text-format metrics endpoint."""
+from fastapi import APIRouter, Request
+from fastapi.responses import PlainTextResponse
+
+router = APIRouter(tags=["observability"])
+
+_METRIC_HELP = {
+    "cad_platform_requests_total":
+        ("Total HTTP requests handled", "counter"),
+    "cad_platform_request_latency_ms_total":
+        ("Cumulative request latency in milliseconds", "counter"),
+    "cad_platform_jobs_queued_total":
+        ("Total generation jobs queued to Celery", "counter"),
+    "cad_platform_jobs_completed_total":
+        ("Total generation jobs completed successfully", "counter"),
+    "cad_platform_jobs_failed_total":
+        ("Total generation jobs that failed", "counter"),
+    "cad_platform_cache_hits_total":
+        ("Total model resolver cache hits", "counter"),
+    "cad_platform_cache_misses_total":
+        ("Total model resolver cache misses", "counter"),
+    "cad_platform_generate_inline_total":
+        ("Total inline (synchronous) generations", "counter"),
+    "cad_platform_generate_inline_ms_total":
+        ("Cumulative inline generation time in milliseconds", "counter"),
+}
+
+
+@router.get("/metrics", response_class=PlainTextResponse,
+            summary="Prometheus metrics",
+            description="Prometheus text format. Restrict access to internal network in production.")
+def prometheus_metrics(request: Request) -> str:
+    m: dict = request.app.state.metrics
+    lines: list[str] = []
+    for metric_name, (help_text, metric_type) in _METRIC_HELP.items():
+        value = m.get(metric_name, 0)
+        lines.append(f"# HELP {metric_name} {help_text}")
+        lines.append(f"# TYPE {metric_name} {metric_type}")
+        lines.append(f"{metric_name} {value}")
+        lines.append("")
+    return "\n".join(lines)
+      ]]></code>
+    </step>
+
+    <step id="3" description="Instrument model_resolver.py">
+      In ModelResolver.resolve(), increment counters at each decision point.
+      Requires injecting `request.app.state.metrics` or using a global counter.
+      Simplest approach: pass metrics dict as optional parameter.
+
+      <code><![CDATA[
+# In routes_geometry.py, pass metrics to resolver:
+# resolved = model_resolver.resolve(request_obj, metrics=request.app.state.metrics)
+
+# In model_resolver.py ModelResolver.resolve():
+def resolve(self, request: ModelResolveRequest,
+            metrics: dict | None = None) -> ModelResolveResponse:
+    m = metrics or {}
+
+    # After cache.get() returns a hit:
+    m["cad_platform_cache_hits_total"] = m.get("cad_platform_cache_hits_total", 0) + 1
+
+    # After all cache/db misses, before generate:
+    m["cad_platform_cache_misses_total"] = m.get("cad_platform_cache_misses_total", 0) + 1
+
+    # After inline generate:
+    m["cad_platform_generate_inline_total"] = m.get("cad_platform_generate_inline_total", 0) + 1
+
+    # After job queued:
+    m["cad_platform_jobs_queued_total"] = m.get("cad_platform_jobs_queued_total", 0) + 1
+      ]]></code>
+    </step>
+  </implementation>
+
+  <tests file="backend/tests/test_production_hardening_v2.py" append="true">
+    <code><![CDATA[
+def test_metrics_prometheus_format():
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    body = r.text
+    assert "# HELP cad_platform_requests_total" in body
+    assert "# TYPE cad_platform_requests_total counter" in body
+    assert "# HELP cad_platform_cache_hits_total" in body
+    assert "# HELP cad_platform_cache_misses_total" in body
+
+
+def test_metrics_increments_on_geometry_request():
+    # Trigger a geometry request
+    client.get("/api/v1/geometry/variant/hex-bolt-iso4014-m8x30")
+    r = client.get("/metrics")
+    body = r.text
+    # cache_hits OR cache_misses must be non-zero
+    hits = int([l for l in body.splitlines()
+                if l.startswith("cad_platform_cache_hits_total ")][0].split()[-1])
+    misses = int([l for l in body.splitlines()
+                  if l.startswith("cad_platform_cache_misses_total ")][0].split()[-1])
+    assert hits + misses > 0
+    ]]></code>
+  </tests>
+
+  <commit_message>feat(T10): Prometheus text-format /metrics with cache hit/miss counters</commit_message>
+</task>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<task id="T11" priority="MEDIUM" category="ops">
+  <title>Pre-warmer — Redis verify + top_skus.production.json</title>
+  <why>
+    pregenerate_top_skus.py queues jobs without checking Redis is reachable.
+    If Redis is down, jobs silently disappear. Also needs production SKU list.
+  </why>
+
+  <files_to_change>
+    <file>backend/scripts/pregenerate_top_skus.py</file>
+    <file>data/top_skus.production.json</file>                <!-- CREATE -->
+  </files_to_change>
+
+  <implementation>
+    <step id="1" file="backend/scripts/pregenerate_top_skus.py">
+      Add --verify-redis flag and verbose progress output:
+      <code><![CDATA[
+# At start of main():
+if args.verify_redis:
+    try:
+        import redis as redis_lib
+        r = redis_lib.Redis.from_url(settings.redis_url or "redis://localhost:6379")
+        r.ping()
+        print(f"✓ Redis connected: {settings.redis_url}")
+    except Exception as exc:
+        print(f"✗ Redis not reachable: {exc}")
+        print("  Fix REDIS_URL or run without --verify-redis for local dev.")
+        sys.exit(1)
+
+# Progress output per job:
+print(f"  [{i+1}/{len(rows)}] Queued {job.job_id[:50]}... status={job.status}")
+
+# Summary at end:
+print(f"\n{'─'*60}")
+print(f"✓ {len(jobs)} jobs queued on queue '{args.queue or QUEUE_BATCH_PREGENERATE}'")
+print(f"  Run workers: celery -A app.workers.tasks:celery_app worker -Q batch_pregenerate --loglevel=info")
+      ]]></code>
+    </step>
+
+    <step id="2" file="data/top_skus.production.json" action="CREATE">
+      All most common mecsu.vn SKUs — sorted by sales volume estimate:
+      <code><![CDATA[
+[
+  {"product_id":"hex-bolt-iso4014","params":{"d":8, "L":30,"P":1.25,"k":5.3,"s":13,"b":22,"lod":"low"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":8, "L":30,"P":1.25,"k":5.3,"s":13,"b":22,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":8, "L":40,"P":1.25,"k":5.3,"s":13,"b":28,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":8, "L":50,"P":1.25,"k":5.3,"s":13,"b":28,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":10,"L":30,"P":1.5, "k":6.4,"s":17,"b":26,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":10,"L":40,"P":1.5, "k":6.4,"s":17,"b":32,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":10,"L":50,"P":1.5, "k":6.4,"s":17,"b":32,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":12,"L":40,"P":1.75,"k":7.5,"s":19,"b":30,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":12,"L":50,"P":1.75,"k":7.5,"s":19,"b":36,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":12,"L":60,"P":1.75,"k":7.5,"s":19,"b":36,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":16,"L":50,"P":2.0, "k":10, "s":24,"b":38,"lod":"medium"}},
+  {"product_id":"hex-bolt-iso4014","params":{"d":16,"L":60,"P":2.0, "k":10, "s":24,"b":44,"lod":"medium"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":8, "s":13.0,"m":6.8,"lod":"low"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":8, "s":13.0,"m":6.8,"lod":"medium"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":10,"s":17.0,"m":8.4,"lod":"medium"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":12,"s":19.0,"m":10.8,"lod":"medium"}},
+  {"product_id":"hex-nut-iso4032","params":{"d":16,"s":24.0,"m":14.8,"lod":"medium"}},
+  {"product_id":"washer-iso7089", "params":{"OD":16,"ID":8.4,"h":1.6,"lod":"medium"}},
+  {"product_id":"washer-iso7089", "params":{"OD":20,"ID":10.5,"h":2.0,"lod":"medium"}},
+  {"product_id":"washer-iso7089", "params":{"OD":24,"ID":13.0,"h":2.5,"lod":"medium"}}
+]
+      ]]></code>
+    </step>
+  </implementation>
+
+  <commit_message>feat(T11): pre-warmer Redis verify + production SKU list</commit_message>
+</task>
+
+</tasks>

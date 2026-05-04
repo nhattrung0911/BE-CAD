@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.schemas.model import ModelResolveRequest, ModelResolveResponse
 from app.services.model_resolver import model_resolver
 from app.services.product_service import product_service
+from app.workers.tasks import AsyncDispatchUnavailable
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -15,7 +16,10 @@ def resolve_model(request: ModelResolveRequest, http_request: Request):
     except ValueError as exc:
         detail = exc.args[0] if exc.args else "Invalid product parameters"
         raise HTTPException(status_code=400, detail=detail)
-    resolved = model_resolver.resolve(request)
+    try:
+        resolved = model_resolver.resolve(request)
+    except AsyncDispatchUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     _record_cache_metrics(http_request, resolved.cache)
     if resolved.status == "queued":
         http_request.app.state.metrics["cad_platform_jobs_queued_total"] += 1

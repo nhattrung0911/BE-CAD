@@ -62,12 +62,18 @@ class InMemoryCache:
 class RedisCache:
     def __init__(self, url: str, fallback: InMemoryCache) -> None:
         self.fallback = fallback
+        self._strict = settings.require_redis_for_ready
         try:
             import redis
 
             self.client = redis.Redis.from_url(url, decode_responses=False)
             self.client.ping()
-        except Exception:
+        except Exception as exc:
+            if self._strict:
+                raise RuntimeError(
+                    "Redis connection failed and REQUIRE_REDIS_FOR_READY=true. "
+                    "Cannot fall back to in-memory cache in production."
+                ) from exc
             self.client = None
 
     def get(self, key: str) -> Any | None:
