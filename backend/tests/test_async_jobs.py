@@ -189,3 +189,82 @@ def test_worker_marks_job_failed_when_generation_fails():
     assert "Missing required params" in job["error_message"]
     assert job["artifact"] is None
     assert app.state.metrics["cad_platform_jobs_failed_total"] == 1
+
+
+def test_enqueue_generation_job_reuses_pending_job_id():
+    first = enqueue_generation_job(
+        queue_name=QUEUE_PREVIEW_FAST,
+        product_id="washer-iso7089",
+        params={"OD": 12, "ID": 6, "h": 1.6},
+        fmt="glb",
+        quality="preview",
+        template_version=settings.template_version,
+    )
+    second = enqueue_generation_job(
+        queue_name=QUEUE_PREVIEW_FAST,
+        product_id="washer-iso7089",
+        params={"OD": 12, "ID": 6, "h": 1.6},
+        fmt="glb",
+        quality="preview",
+        template_version=settings.template_version,
+    )
+
+    assert first.job_id == second.job_id
+    assert second.status == "pending"
+
+
+def test_enqueue_generation_job_resets_failed_job_to_pending():
+    queued = enqueue_generation_job(
+        queue_name=QUEUE_PREVIEW_FAST,
+        product_id="washer-iso7089",
+        params={"OD": 12, "h": 1.6},
+        fmt="glb",
+        quality="preview",
+        template_version=settings.template_version,
+    )
+    failed = run_generation_job(queued.job_id)
+    assert failed["status"] == "failed"
+
+    retried = enqueue_generation_job(
+        queue_name=QUEUE_PREVIEW_FAST,
+        product_id="washer-iso7089",
+        params={"OD": 12, "h": 1.6},
+        fmt="glb",
+        quality="preview",
+        template_version=settings.template_version,
+    )
+
+    assert retried.job_id == queued.job_id
+    assert retried.status == "pending"
+
+    with SessionLocal() as session:
+        persisted = JobRepository(session).find_by_job_id(queued.job_id)
+        assert persisted.status == "pending"
+        assert persisted.error_message is None
+
+
+def test_rerunning_done_job_is_idempotent(monkeypatch):
+    queued = enqueue_generation_job(
+        queue_name=QUEUE_PREVIEW_FAST,
+        product_id="washer-iso7089",
+        params={"OD": 12, "ID": 6, "h": 1.6},
+        fmt="glb",
+        quality="preview",
+        template_version=settings.template_version,
+    )
+
+    call_count = {"count": 0}
+    class CountingBackend:
+        def generate(self, product_id, params, fmt, quality):
+            call_count["count"] += 1
+            return GeneratedModel(content=b'{"generator":"fake"}', format=fmt, metadata={"generator": "fake"})
+
+    monkeypatch.setattr("app.services.job_runner.get_cad_backend", lambda name: CountingBackend())
+
+    first = run_generation_job(queued.job_id)
+    second = run_generation_job(queued.job_id)
+
+    assert first["status"] == "done"
+    assert second["status"] == "done"
+    assert call_count["count"] == 1
+    assert app.state.metrics["cad_platform_jobs_completed_total"] == 1

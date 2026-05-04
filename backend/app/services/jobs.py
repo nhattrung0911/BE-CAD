@@ -48,6 +48,9 @@ def enqueue_generation_job(
         repo = JobRepository(session)
         existing = repo.find_by_job_id(job_id)
         if existing:
+            if existing.status == "failed":
+                repo.mark_pending(existing)
+                session.commit()
             return QueuedJob(
                 job_id=existing.job_id,
                 queue_name=existing.queue_name,

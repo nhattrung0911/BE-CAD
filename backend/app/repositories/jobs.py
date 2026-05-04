@@ -55,3 +55,9 @@ class JobRepository:
         job.error_message = error_message[:1024]
         self.session.flush()
         return job
+
+    def mark_pending(self, job: GenerationJob) -> GenerationJob:
+        job.status = "pending"
+        job.error_message = None
+        self.session.flush()
+        return job
