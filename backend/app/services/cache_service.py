@@ -1,8 +1,15 @@
+import time
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
 from app.core.config import settings
+
+
+@dataclass
+class CacheEntry:
+    value: Any
+    expires_at: float | None
 
 
 @dataclass
@@ -13,15 +20,24 @@ class LockToken:
 
 class InMemoryCache:
     def __init__(self) -> None:
-        self._data: dict[str, Any] = {}
+        self._data: dict[str, CacheEntry] = {}
         self._locks: set[str] = set()
         self._mutex = Lock()
 
     def get(self, key: str) -> Any | None:
-        return self._data.get(key)
+        with self._mutex:
+            entry = self._data.get(key)
+            if entry is None:
+                return None
+            if entry.expires_at is not None and time.monotonic() > entry.expires_at:
+                del self._data[key]
+                return None
+            return entry.value
 
     def set(self, key: str, value: Any, ttl_seconds: int | None = None) -> None:
-        self._data[key] = value
+        expires_at = time.monotonic() + ttl_seconds if ttl_seconds is not None else None
+        with self._mutex:
+            self._data[key] = CacheEntry(value=value, expires_at=expires_at)
 
     def acquire_lock(self, key: str, ttl_seconds: int = 60) -> LockToken | None:
         with self._mutex:

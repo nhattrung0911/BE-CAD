@@ -1,6 +1,6 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 
 
 class Settings(BaseSettings):
@@ -26,10 +26,24 @@ class Settings(BaseSettings):
     auto_create_schema: bool = True
     require_redis_for_ready: bool = False
     max_upload_bytes: int = 100 * 1024 * 1024
+    model_cache_ttl_seconds: int = 86400
 
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        if self.environment == "production":
+            if self.cad_backend == "mock":
+                raise ValueError("CAD_BACKEND=mock is not allowed in production. Set CAD_BACKEND=cadquery")
+            if self.auto_create_schema:
+                raise ValueError("AUTO_CREATE_SCHEMA=true is not allowed in production. Use Alembic migrations.")
+            if not self.require_redis_for_ready:
+                raise ValueError(
+                    "REQUIRE_REDIS_FOR_READY must be true in production to prevent split-brain cache."
+                )
+        return self
 
 
 settings = Settings()

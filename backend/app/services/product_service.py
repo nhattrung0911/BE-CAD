@@ -1,3 +1,5 @@
+import functools
+
 from app.core.config import settings
 from app.schemas.product import Product, ProductVariant, ParameterSpec
 from app.services.hash_service import stable_params_hash
@@ -208,12 +210,19 @@ class ProductService:
             )
         return variants
 
-    def get_variant(self, variant_id: str) -> ProductVariant:
+    @functools.cached_property
+    def _variant_lookup(self) -> dict[str, ProductVariant]:
+        lookup = {}
         for product_id in VARIANTS:
             for variant in self.list_variants(product_id):
-                if variant.variant_id == variant_id:
-                    return variant
-        raise KeyError(variant_id)
+                lookup[variant.variant_id] = variant
+        return lookup
+
+    def get_variant(self, variant_id: str) -> ProductVariant:
+        variant = self._variant_lookup.get(variant_id)
+        if variant is None:
+            raise KeyError(variant_id)
+        return variant
 
     def grouped_variants(self, product_id: str) -> dict:
         variants = self.list_variants(product_id)

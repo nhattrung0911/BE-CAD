@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.security import require_admin_api_key
 from app.ingestion.svg_parser import parse_spec_table_text, parse_svg_dimension_labels
 from app.repositories.parsed_drawings import ParsedDrawingRepository
 from app.schemas.ingestion import DrawingIngestRequest, DrawingIngestResponse
@@ -11,7 +12,11 @@ router = APIRouter(prefix="/ingest", tags=["ingestion"])
 
 
 @router.post("/2d", response_model=DrawingIngestResponse)
-def ingest_2d(request: DrawingIngestRequest, db: Session = Depends(get_db)):
+def ingest_2d(
+    request: DrawingIngestRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_api_key),
+):
     dimensions = parse_svg_dimension_labels(request.content)
     metadata = parse_spec_table_text(request.content)
     raw_sha = sha256_bytes(request.content.encode("utf-8"))

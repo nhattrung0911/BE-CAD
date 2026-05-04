@@ -13,6 +13,7 @@ frontend-demo/.vite/
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # IDEs & OS
 .vscode/

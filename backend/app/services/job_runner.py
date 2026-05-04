@@ -62,7 +62,11 @@ def run_model_generation_job(job_id: str) -> dict:
             "sha256": stored["sha256"],
             "file_size": stored["file_size"],
         }
-        cache.set(model_cache_key(job.product_id, job.params_hash, job.quality, job.format), {"artifact": artifact_payload, "source": "generated_parametric"})
+        cache.set(
+            model_cache_key(job.product_id, job.params_hash, job.quality, job.format),
+            {"artifact": artifact_payload, "source": "generated_parametric"},
+            ttl_seconds=settings.model_cache_ttl_seconds,
+        )
         with SessionLocal() as session:
             jobs = JobRepository(session)
             current = jobs.find_by_job_id(job_id)

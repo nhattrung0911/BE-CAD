@@ -117,3 +117,5 @@ Docker Compose includes API, worker, Redis, Postgres, and MinIO:
 cd infra
 docker compose --env-file .env.example up --build
 ```
+
+For production-style configuration, use `infra/.env.production.example` as the placeholder template and provide real secrets outside git.

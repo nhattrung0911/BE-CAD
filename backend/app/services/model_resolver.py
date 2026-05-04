@@ -43,7 +43,11 @@ class ModelResolver:
                     sha256=existing.sha256,
                     file_size=existing.file_size,
                 )
-                cache.set(cache_key, {"artifact": artifact_response.model_dump(), "source": "cache_db"})
+                cache.set(
+                    cache_key,
+                    {"artifact": artifact_response.model_dump(), "source": "cache_db"},
+                    ttl_seconds=settings.model_cache_ttl_seconds,
+                )
                 return ModelResolveResponse(status="ready", artifact=artifact_response, cache="hit", source="cache_db")
 
             vendor = VendorAssetRepository(session).find_exact(request.product_id, request.format)
@@ -55,7 +59,11 @@ class ModelResolver:
                     sha256=vendor.sha256,
                     file_size=vendor.file_size,
                 )
-                cache.set(cache_key, {"artifact": artifact_response.model_dump(), "source": "vendor_exact"})
+                cache.set(
+                    cache_key,
+                    {"artifact": artifact_response.model_dump(), "source": "vendor_exact"},
+                    ttl_seconds=settings.model_cache_ttl_seconds,
+                )
                 return ModelResolveResponse(status="ready", artifact=artifact_response, cache="miss", source="vendor_exact")
 
         lock = cache.acquire_lock(f"lock:{cache_key}", ttl_seconds=120)
@@ -103,7 +111,11 @@ class ModelResolver:
                 "sha256": artifact["sha256"],
                 "file_size": artifact["file_size"],
             }
-            cache.set(cache_key, {"artifact": artifact_response, "source": "generated_parametric"})
+            cache.set(
+                cache_key,
+                {"artifact": artifact_response, "source": "generated_parametric"},
+                ttl_seconds=settings.model_cache_ttl_seconds,
+            )
             return ModelResolveResponse(
                 status="ready",
                 artifact=ArtifactResponse(**artifact_response),

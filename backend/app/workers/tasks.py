@@ -1,3 +1,5 @@
+import logging
+
 try:
     from celery import Celery
 except ImportError:
@@ -7,20 +9,35 @@ from app.core.config import settings
 from app.services.jobs import QUEUE_BATCH_PREGENERATE, QUEUE_CAD_GENERATE, QUEUE_ENGINEERING_STEP, QUEUE_PREVIEW_FAST
 from app.services.job_runner import run_model_generation_job
 
-if Celery:
-    celery_app = Celery(
+logger = logging.getLogger(__name__)
+_celery_app = None
+
+
+def get_celery_app():
+    global _celery_app
+    if _celery_app is not None:
+        return _celery_app
+    if not settings.redis_url:
+        raise RuntimeError(
+            "REDIS_URL is required for Celery. Set REDIS_URL or use MODEL_SYNC_GENERATION=true for local dev."
+        )
+    if Celery is None:
+        raise RuntimeError("celery package is required")
+    _celery_app = Celery(
         "fastener_cad",
-        broker=settings.redis_url or "memory://",
-        backend=settings.redis_url or "cache+memory://",
+        broker=settings.redis_url,
+        backend=settings.redis_url,
     )
-    celery_app.conf.task_routes = {
+    _celery_app.conf.task_routes = {
         "app.workers.tasks.generate_preview": {"queue": QUEUE_PREVIEW_FAST},
         "app.workers.tasks.generate_cad": {"queue": QUEUE_CAD_GENERATE},
         "app.workers.tasks.generate_engineering_step": {"queue": QUEUE_ENGINEERING_STEP},
         "app.workers.tasks.batch_pregenerate": {"queue": QUEUE_BATCH_PREGENERATE},
     }
-else:
-    celery_app = None
+    return _celery_app
+
+
+celery_app = get_celery_app() if Celery and settings.redis_url else None
 
 
 def _task(fn):
@@ -52,8 +69,10 @@ def run_generation_job(job_id: str) -> dict:
 
 
 def dispatch_generation_job(queue_name: str, job_id: str) -> None:
-    if celery_app is None or not settings.redis_url:
+    if not settings.redis_url:
+        logger.warning("No REDIS_URL configured - skipping async dispatch of job %s", job_id)
         return
+    app = get_celery_app()
     task_by_queue = {
         QUEUE_PREVIEW_FAST: generate_preview,
         QUEUE_CAD_GENERATE: generate_cad,
@@ -61,4 +80,6 @@ def dispatch_generation_job(queue_name: str, job_id: str) -> None:
         QUEUE_BATCH_PREGENERATE: generate_cad,
     }
     task = task_by_queue[queue_name]
+    if app is None:
+        return
     task.apply_async(args=[job_id], queue=queue_name)
