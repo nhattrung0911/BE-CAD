@@ -74,12 +74,12 @@ def dispatch_generation_job(queue_name: str, job_id: str) -> None:
         return
     app = get_celery_app()
     task_by_queue = {
-        QUEUE_PREVIEW_FAST: generate_preview,
-        QUEUE_CAD_GENERATE: generate_cad,
-        QUEUE_ENGINEERING_STEP: generate_engineering_step,
-        QUEUE_BATCH_PREGENERATE: generate_cad,
+        QUEUE_PREVIEW_FAST: (generate_preview, [job_id]),
+        QUEUE_CAD_GENERATE: (generate_cad, [job_id]),
+        QUEUE_ENGINEERING_STEP: (generate_engineering_step, [job_id]),
+        QUEUE_BATCH_PREGENERATE: (batch_pregenerate, [[job_id]]),
     }
-    task = task_by_queue[queue_name]
+    task, args = task_by_queue[queue_name]
     if app is None:
         return
-    task.apply_async(args=[job_id], queue=queue_name)
+    task.apply_async(args=args, queue=queue_name)

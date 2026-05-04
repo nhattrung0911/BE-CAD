@@ -21,6 +21,24 @@ def test_demo_catalog_exposes_five_products():
     }.issubset(product_ids)
 
 
+def test_demo_catalog_products_have_generateable_dimension_variants():
+    products = client.get("/api/v1/products").json()
+
+    for product in products:
+        variants_response = client.get(f"/api/v1/products/{product['product_id']}/variants")
+
+        assert variants_response.status_code == 200
+        variants = [
+            variant
+            for group in variants_response.json()["grouped_by_diameter"].values()
+            for variant in group
+        ]
+        assert variants, product["product_id"]
+        first_variant = variants[0]
+        assert first_variant["params"]
+        assert first_variant["geometry"]["medium_hash"]
+
+
 def test_local_frontend_origin_is_allowed_by_cors():
     response = client.options(
         "/api/v1/products/hex-bolt-iso4014/variants",

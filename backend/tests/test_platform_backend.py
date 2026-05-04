@@ -51,7 +51,7 @@ def test_vendor_asset_registration_stores_checksum_and_license_state():
             "product_id": "hex-bolt-iso4014",
             "format": "step",
             "license_status": "approved",
-            "validation_status": "pending",
+            "validation_status": "valid",
         },
         files={"file": ("bolt.step", io.BytesIO(payload), "application/step")},
     )
@@ -61,7 +61,7 @@ def test_vendor_asset_registration_stores_checksum_and_license_state():
     assert body["product_id"] == "hex-bolt-iso4014"
     assert body["format"] == "step"
     assert body["license_status"] == "approved"
-    assert body["validation_status"] == "pending"
+    assert body["validation_status"] == "valid"
     assert body["sha256"]
     assert body["storage_key"].endswith("/bolt.step")
 
@@ -72,6 +72,28 @@ def test_vendor_asset_registration_stores_checksum_and_license_state():
         )
     assert found is not None
     assert found.sha256 == body["sha256"]
+
+
+def test_pending_vendor_asset_is_not_used_as_exact_model_source():
+    response = client.post(
+        "/api/v1/vendor-assets",
+        data={
+            "product_id": "hex-bolt-iso4014",
+            "format": "glb",
+            "license_status": "approved",
+            "validation_status": "pending",
+        },
+        files={"file": ("pending.glb", io.BytesIO(b"pending vendor glb"), "model/gltf-binary")},
+    )
+    assert response.status_code == 201
+
+    with SessionLocal() as session:
+        found = VendorAssetRepository(session).find_exact(
+            product_id="hex-bolt-iso4014",
+            fmt="glb",
+        )
+
+    assert found is None
 
 
 def test_resolver_prefers_registered_vendor_asset_for_exact_format():

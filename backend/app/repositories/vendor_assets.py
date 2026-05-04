@@ -43,7 +43,7 @@ class VendorAssetRepository:
                 VendorAsset.product_id == product_id,
                 VendorAsset.format == fmt,
                 VendorAsset.license_status == "approved",
-                VendorAsset.validation_status.in_(["valid", "pending"]),
+                VendorAsset.validation_status == "valid",
             )
-            .order_by(VendorAsset.validation_status.desc(), VendorAsset.created_at.desc())
+            .order_by(VendorAsset.created_at.desc())
         )

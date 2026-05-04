@@ -1,8 +1,13 @@
 from fastapi.testclient import TestClient
+from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 from app.core.database import Base, engine
+from app.core.config import settings
 from app.main import app
 from app.services.cache_service import cache
+from app.services.storage import S3Storage
 
 
 client = TestClient(app)
@@ -56,3 +61,48 @@ def test_geometry_generate_rejects_missing_required_parameters():
     body = response.json()
     assert body["detail"]["error"] == "Invalid product parameters"
     assert body["detail"]["missing"] == ["P", "k", "s", "b"]
+
+
+def test_production_env_template_satisfies_compose_contract():
+    repo_root = Path(__file__).resolve().parents[2]
+    env_text = (repo_root / "infra" / ".env.production.example").read_text()
+    compose_text = (repo_root / "infra" / "docker-compose.yml").read_text()
+
+    required_keys = {
+        "APP_ENV_FILE",
+        "POSTGRES_DB",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "REDIS_PASSWORD",
+        "MINIO_ROOT_USER",
+        "MINIO_ROOT_PASSWORD",
+        "S3_PUBLIC_BASE_URL",
+    }
+    env_keys = {
+        line.split("=", 1)[0]
+        for line in env_text.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+
+    assert required_keys.issubset(env_keys)
+    assert "${APP_ENV_FILE:-.env.example}" in compose_text
+    assert "redis-server --requirepass" in compose_text
+
+
+def test_s3_storage_uses_public_base_url_for_artifact_urls(monkeypatch):
+    class FakeS3Client:
+        def put_object(self, **kwargs):
+            return None
+
+    fake_boto3 = SimpleNamespace(client=lambda service: FakeS3Client())
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    original_base_url = getattr(settings, "s3_public_base_url", None)
+    settings.s3_public_base_url = "https://cdn.example.test/cad-assets"
+
+    try:
+        storage = S3Storage("bucket", "/artifacts")
+        stored = storage.put_bytes("product/hash/preview.glb", b"glTF", content_type="model/gltf-binary")
+
+        assert stored["url"] == "https://cdn.example.test/cad-assets/product/hash/preview.glb"
+    finally:
+        settings.s3_public_base_url = original_base_url

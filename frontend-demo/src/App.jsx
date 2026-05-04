@@ -6,6 +6,29 @@ import './style.css';
 
 const API = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
 
+const PRODUCT_NOTES = {
+  'hex-bolt-iso4014': {
+    reference: 'Global Fastener category: Bolts & Studs / Hex Bolts & Screws',
+    demoSource: 'Backend generated CadQuery GLB',
+  },
+  'washer-iso7089': {
+    reference: 'Global Fastener category: Washers & Retaining Rings / Plain Washers',
+    demoSource: 'Backend generated CadQuery GLB',
+  },
+  'retaining-ring-gb891': {
+    reference: 'Global Fastener category: Washers & Retaining Rings / Retaining Rings',
+    demoSource: 'Backend generated CadQuery GLB',
+  },
+  'hex-bolt-din931': {
+    reference: 'Global Fastener category: Bolts & Studs / Hex Bolts & Screws',
+    demoSource: 'Backend generated CadQuery GLB',
+  },
+  'washer-din125': {
+    reference: 'Global Fastener category: Washers & Retaining Rings / Plain Washers',
+    demoSource: 'Backend generated CadQuery GLB',
+  },
+};
+
 function flattenVariantGroups(groups) {
   return Object.values(groups || {}).flat();
 }
@@ -28,14 +51,19 @@ function Scene({ modelUrl }) {
       <directionalLight position={[18, 22, 16]} intensity={2} />
       <directionalLight position={[-10, -8, -12]} intensity={0.6} />
       <Environment preset="studio" />
-      <Bounds fit clip observe margin={1.25}>
-        <Suspense fallback={<Html center>Loading 3D...</Html>}>
-          {modelUrl ? <FastenerModel url={modelUrl} /> : null}
+      <Bounds fit clip observe margin={1.22}>
+        <Suspense fallback={<Html center>Loading 3D model</Html>}>
+          {modelUrl ? <FastenerModel key={modelUrl} url={modelUrl} /> : null}
         </Suspense>
       </Bounds>
       <OrbitControls makeDefault enableDamping dampingFactor={0.08} />
     </>
   );
+}
+
+function numberFromInput(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function App() {
@@ -44,7 +72,8 @@ function App() {
   const [selectedProductId, setSelectedProductId] = useState('');
   const [selectedVariantId, setSelectedVariantId] = useState('');
   const [geometry, setGeometry] = useState(null);
-  const [status, setStatus] = useState('loading variants');
+  const [customParams, setCustomParams] = useState({});
+  const [status, setStatus] = useState('loading products');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -76,6 +105,7 @@ function App() {
     setVariants([]);
     setSelectedVariantId('');
     setGeometry(null);
+    setCustomParams({});
     fetch(`${API}/api/v1/products/${selectedProductId}/variants`)
       .then((response) => {
         if (!response.ok) throw new Error(`Variants request failed: ${response.status}`);
@@ -98,10 +128,18 @@ function App() {
     };
   }, [selectedProductId]);
 
+  const selectedProduct = products.find((product) => product.product_id === selectedProductId);
+  const selectedVariant = variants.find((variant) => variant.variant_id === selectedVariantId);
+
+  useEffect(() => {
+    if (!selectedVariant) return;
+    setCustomParams(selectedVariant.params || {});
+  }, [selectedVariant]);
+
   useEffect(() => {
     if (!selectedVariantId) return;
     let active = true;
-    setStatus('generating geometry');
+    setStatus('generating selected size');
     setError('');
     setGeometry(null);
     fetch(`${API}/api/v1/geometry/variant/${selectedVariantId}?lod=medium`)
@@ -129,14 +167,49 @@ function App() {
     return `${API}${geometry.hash_url}`;
   }, [geometry]);
 
-  const selectedVariant = variants.find((variant) => variant.variant_id === selectedVariantId);
+  const parameterSpecs = selectedProduct?.parameters || [];
+  const note = PRODUCT_NOTES[selectedProductId];
+
+  function updateCustomParam(name, value) {
+    setCustomParams((current) => ({ ...current, [name]: numberFromInput(value) }));
+  }
+
+  function generateCustomGeometry(event) {
+    event?.preventDefault();
+    if (!selectedProductId) return;
+    setStatus('generating custom dimensions');
+    setError('');
+    setGeometry(null);
+    fetch(`${API}/api/v1/geometry/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        product_id: selectedProductId,
+        params: customParams,
+        lod: 'medium',
+        format: 'glb',
+      }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Custom geometry request failed: ${response.status}`);
+        return response.json();
+      })
+      .then((payload) => {
+        setGeometry(payload);
+        setStatus(payload.status);
+      })
+      .catch((err) => {
+        setError(err.message);
+        setStatus('error');
+      });
+  }
 
   return (
     <main className="app-shell">
       <section className="toolbar">
         <div>
-          <h1>Fastener CAD Demo</h1>
-          <p>Backend contract viewer for generated GLB output.</p>
+          <h1>Fastener CAD BE Demo</h1>
+          <p>Five backend-generated GLB examples with OrbitControls, dimensions, and custom size generation.</p>
         </div>
         <div className="controls">
           <label>
@@ -162,6 +235,20 @@ function App() {
         </div>
       </section>
 
+      <section className="product-strip">
+        {products.map((product) => (
+          <button
+            className={product.product_id === selectedProductId ? 'product-tab active' : 'product-tab'}
+            key={product.product_id}
+            onClick={() => setSelectedProductId(product.product_id)}
+            type="button"
+          >
+            <span>{product.standard}</span>
+            {product.name}
+          </button>
+        ))}
+      </section>
+
       <section className="viewer-grid">
         <div className="viewer">
           <Canvas camera={{ position: [34, 26, 36], fov: 42 }}>
@@ -169,25 +256,70 @@ function App() {
           </Canvas>
         </div>
         <aside className="details">
-          <h2>{selectedVariant?.sku || 'No variant'}</h2>
-          <dl>
+          <h2>{selectedVariant?.sku || selectedProduct?.name || 'No product'}</h2>
+          <dl className="summary">
             <div>
               <dt>Status</dt>
               <dd>{status}</dd>
             </div>
             <div>
-              <dt>Source</dt>
+              <dt>Geometry source</dt>
               <dd>{geometry?.source || '-'}</dd>
             </div>
+            <div>
+              <dt>Reference</dt>
+              <dd>{note?.reference || '-'}</dd>
+            </div>
+          </dl>
+
+          <h3>Dimensions</h3>
+          <table className="dimension-table">
+            <tbody>
+              {parameterSpecs.map((spec) => (
+                <tr key={spec.name}>
+                  <th>{spec.name}</th>
+                  <td>{spec.label}</td>
+                  <td>{customParams[spec.name] ?? '-'}</td>
+                  <td>{spec.unit}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <form className="dimension-form" onSubmit={generateCustomGeometry}>
+            <h3>Custom size</h3>
+            <div className="field-grid">
+              {parameterSpecs.map((spec) => (
+                <label key={spec.name}>
+                  {spec.name}
+                  <input
+                    min="0"
+                    step="0.1"
+                    type="number"
+                    value={customParams[spec.name] ?? ''}
+                    onChange={(event) => updateCustomParam(spec.name, event.target.value)}
+                  />
+                </label>
+              ))}
+            </div>
+            <button className="primary-action" onClick={generateCustomGeometry} type="button">
+              Generate custom GLB
+            </button>
+          </form>
+
+          <dl className="summary">
             <div>
               <dt>Hash URL</dt>
               <dd>{geometry?.hash_url || '-'}</dd>
             </div>
+            <div>
+              <dt>Demo source</dt>
+              <dd>{note?.demoSource || '-'}</dd>
+            </div>
           </dl>
-          <pre>{JSON.stringify(selectedVariant?.params || {}, null, 2)}</pre>
           {modelUrl ? (
             <a className="asset-link" href={modelUrl} target="_blank" rel="noreferrer">
-              Open GLB
+              Open generated GLB
             </a>
           ) : null}
           {error ? <p className="error">{error}</p> : null}

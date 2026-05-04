@@ -239,6 +239,32 @@ def test_dispatch_without_redis_logs_warning_not_raises(monkeypatch):
         settings.redis_url = original_redis_url
 
 
+def test_dispatch_batch_queue_uses_batch_task(monkeypatch):
+    original_redis_url = settings.redis_url
+    settings.redis_url = "redis://localhost:6379/0"
+    calls = []
+
+    class FakeTask:
+        def __init__(self, name):
+            self.name = name
+
+        def apply_async(self, *, args, queue):
+            calls.append((self.name, args, queue))
+
+    try:
+        monkeypatch.setattr(worker_tasks, "get_celery_app", lambda: object())
+        monkeypatch.setattr(worker_tasks, "generate_preview", FakeTask("preview"))
+        monkeypatch.setattr(worker_tasks, "generate_cad", FakeTask("cad"))
+        monkeypatch.setattr(worker_tasks, "generate_engineering_step", FakeTask("engineering"))
+        monkeypatch.setattr(worker_tasks, "batch_pregenerate", FakeTask("batch"))
+
+        dispatch_generation_job("batch_pregenerate", "job-batch-123")
+
+        assert calls == [("batch", [["job-batch-123"]], "batch_pregenerate")]
+    finally:
+        settings.redis_url = original_redis_url
+
+
 def test_get_celery_app_raises_without_redis():
     original_redis_url = settings.redis_url
     settings.redis_url = None

@@ -58,7 +58,7 @@ class LocalStorage(ObjectStorage):
 class S3Storage(ObjectStorage):
     def __init__(self, bucket: str, public_prefix: str) -> None:
         self.bucket = bucket
-        self.public_prefix = public_prefix.rstrip("/")
+        self.public_prefix = (settings.s3_public_base_url or public_prefix).rstrip("/")
         try:
             import boto3
         except ImportError as exc:

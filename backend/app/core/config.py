@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     public_raw_asset_prefix: str = "/raw-assets"
     storage_backend: str = "local"
     s3_bucket: str | None = None
+    s3_public_base_url: str | None = None
     redis_url: str | None = None
     cad_backend: str = "mock"
     template_version: str = "cadquery-glb-v1"
