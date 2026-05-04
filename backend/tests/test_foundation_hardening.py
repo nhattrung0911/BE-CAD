@@ -19,6 +19,7 @@ def setup_function():
     settings.admin_api_key = None
     settings.auto_create_schema = True
     settings.require_redis_for_ready = False
+    settings.max_upload_bytes = 100 * 1024 * 1024
 
 
 def test_vendor_asset_upload_requires_admin_api_key_when_configured():
@@ -45,6 +46,34 @@ def test_vendor_asset_upload_accepts_valid_admin_api_key():
 
     assert response.status_code == 201
     assert response.json()["storage_key"] == "hex-bolt-iso4014/glb/bolt.glb"
+
+
+def test_vendor_asset_upload_rejects_invalid_format_and_status_values():
+    response = client.post(
+        "/api/v1/vendor-assets",
+        data={
+            "product_id": "hex-bolt-iso4014",
+            "format": "exe",
+            "license_status": "unknown",
+            "validation_status": "maybe",
+        },
+        files={"file": ("bolt.exe", b"bad", "application/octet-stream")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["format"] == "unsupported"
+
+
+def test_vendor_asset_upload_rejects_files_over_configured_limit():
+    settings.max_upload_bytes = 4
+
+    response = client.post(
+        "/api/v1/vendor-assets",
+        data={"product_id": "hex-bolt-iso4014", "format": "glb"},
+        files={"file": ("bolt.glb", b"too-large", "model/gltf-binary")},
+    )
+
+    assert response.status_code == 413
 
 
 def test_local_storage_rejects_path_traversal_keys():

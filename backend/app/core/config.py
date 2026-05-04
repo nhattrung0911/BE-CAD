@@ -20,10 +20,16 @@ class Settings(BaseSettings):
     template_version: str = "cadquery-glb-v1"
     model_sync_generation: bool = True
     request_id_header: str = "X-Request-ID"
+    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     admin_api_key: str | None = None
     admin_api_key_header: str = "X-Admin-API-Key"
     auto_create_schema: bool = True
     require_redis_for_ready: bool = False
+    max_upload_bytes: int = 100 * 1024 * 1024
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
 
 
 settings = Settings()

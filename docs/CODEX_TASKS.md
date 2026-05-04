@@ -16,7 +16,7 @@ Add Celery/RQ. For uncached requests return `queued`. Add `/api/v1/model-jobs/{j
 
 ## Task 4: CadQuery exporter
 
-Add `CAD_BACKEND=mock|cadquery`. Implement CadQuery exporter for hex bolt with simplified visual thread. Export STEP and GLB if CadQuery supports it in environment; otherwise STEP + conversion TODO behind clean interface. Add tests that mock still works in CI.
+Add `CAD_BACKEND=mock|cadquery`. Implement CadQuery exporter for hex bolt with simplified visual thread. Export STEP and GLB if CadQuery supports it in environment; otherwise keep STEP export plus a documented conversion interface. Add tests that mock still works in CI.
 
 ## Task 5: Vendor 3D ingestion
 

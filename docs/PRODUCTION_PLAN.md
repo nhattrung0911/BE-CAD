@@ -38,6 +38,8 @@ Acceptance:
 - Runtime schema creation disabled with `AUTO_CREATE_SCHEMA=false`; database changes are applied only through Alembic migrations.
 - Admin ingestion endpoints protected by `ADMIN_API_KEY` and the `X-Admin-API-Key` header.
 - Storage keys sanitized before local/S3 writes; uploaded filenames and product identifiers must never be trusted as paths.
+- Vendor asset uploads enforce allowed formats/statuses and `MAX_UPLOAD_BYTES`.
+- CORS is environment-driven through `CORS_ALLOW_ORIGINS`; production must list only approved frontend/admin origins.
 - `/ready` can require Redis by setting `REQUIRE_REDIS_FOR_READY=true`; multi-instance deployments must not silently fall back to in-memory locks.
 - Worker autoscaling based on queue length.
 - CDN immutable caching.
@@ -53,6 +55,7 @@ Before a team builds production features on this baseline:
 - `python -m pytest -q -p no:cacheprovider` must pass.
 - `PYTHONPATH=. alembic upgrade head` must be the only schema creation path in production.
 - `AUTO_CREATE_SCHEMA=false`, `ADMIN_API_KEY` set to a secret value, and `REQUIRE_REDIS_FOR_READY=true` for scaled API deployments.
+- Docker Compose requires explicit `POSTGRES_*` and `MINIO_*` environment values; do not commit real secrets.
 - Public product/geometry APIs and admin ingestion APIs stay separated by auth and audit policy.
 - Catalog parameters must be validated before model generation; invalid products or missing dimensions must fail before queueing work.
 

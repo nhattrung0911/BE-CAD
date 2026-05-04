@@ -198,6 +198,13 @@ The response includes raw storage key, public URL, checksum, file size, license 
 
 Uploaded filenames and storage key segments are sanitized before writing to local storage or S3. Path traversal segments are rejected.
 
+Upload validation is enforced before storage writes:
+
+- `format` must be `glb`, `step`, or `stl`;
+- `license_status` must be `pending`, `approved`, `restricted`, or `rejected`;
+- `validation_status` must be `pending`, `valid`, or `invalid`;
+- file size must be less than or equal to `MAX_UPLOAD_BYTES`.
+
 ## 2D ingestion
 
 `POST /api/v1/ingest/2d` accepts:

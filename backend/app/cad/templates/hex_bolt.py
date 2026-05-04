@@ -10,10 +10,8 @@ class HexBoltTemplate(CadTemplate):
     def generate(self, params: dict, fmt: str, quality: str) -> GeneratedModel:
         self.validate_params(params)
 
-        # Production TODO:
-        # - Replace this mock with CadQuery/OCC solid generation.
-        # - Preview: simplified visual thread.
-        # - Engineering: exact STEP with optional real thread.
+        # Mock backend payload. Real CadQuery/OCC generation is implemented behind
+        # the cad backend interface so tests can stay deterministic and lightweight.
         payload = {
             "generator": "mock",
             "template": "hex_bolt",

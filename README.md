@@ -115,5 +115,5 @@ Docker Compose includes API, worker, Redis, Postgres, and MinIO:
 
 ```bash
 cd infra
-docker compose up --build
+docker compose --env-file .env.example up --build
 ```

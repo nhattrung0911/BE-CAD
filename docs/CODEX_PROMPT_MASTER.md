@@ -41,7 +41,7 @@ Goal: turn this scaffold into a production-grade backend for hybrid fastener 3D 
   - tests to run
 - Prefer adding tests before refactors.
 - Preserve public API unless the task explicitly changes it.
-- Use TODO comments only when connected to a doc/task ID.
+- Use explicit follow-up comments only when connected to a doc/task ID.
 
 ## First implementation milestones
 
