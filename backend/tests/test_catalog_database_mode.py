@@ -173,3 +173,84 @@ def test_catalog_repository_get_variant_uses_single_query():
 
     assert variant.variant_id == "hex-bolt-iso4014-m8x30"
     assert len(statements) == 1, statements
+
+
+def test_product_service_resolves_source_once_per_operation():
+    custom_product = Product(
+        product_id="custom-bolt",
+        standard="CSTM-1",
+        family="hex_bolt",
+        name="Custom bolt",
+        parameters=[ParameterSpec(name="d", label="Diameter")],
+    )
+
+    class CountingCatalogSource:
+        def __init__(self) -> None:
+            self.has_products_calls = 0
+
+        def has_products(self) -> bool:
+            self.has_products_calls += 1
+            return True
+
+        def list_products(self):
+            return [custom_product]
+
+        def get_product(self, product_id: str):
+            if product_id != "custom-bolt":
+                raise KeyError(product_id)
+            return custom_product
+
+        def list_variants(self, product_id: str):
+            if product_id != "custom-bolt":
+                raise KeyError(product_id)
+            return []
+
+        def get_variant(self, variant_id: str):
+            raise KeyError(variant_id)
+
+    source = CountingCatalogSource()
+    service = ProductService(catalog_source=source, allow_demo_fallback=False)
+
+    products = service.list_products()
+    product = service.get_product("custom-bolt")
+
+    assert [item.product_id for item in products] == ["custom-bolt"]
+    assert product.product_id == "custom-bolt"
+    assert source.has_products_calls == 2
+
+
+def test_product_service_catalog_status_snapshot():
+    class EmptyCatalogSource:
+        def has_products(self) -> bool:
+            return False
+
+        def list_products(self):
+            return []
+
+        def get_product(self, product_id: str):
+            raise KeyError(product_id)
+
+        def list_variants(self, product_id: str):
+            raise KeyError(product_id)
+
+        def get_variant(self, variant_id: str):
+            raise KeyError(variant_id)
+
+    class DemoFallbackSource:
+        def has_products(self) -> bool:
+            return True
+
+    service = ProductService(
+        catalog_source=EmptyCatalogSource(),
+        demo_catalog_source=DemoFallbackSource(),
+        allow_demo_fallback=True,
+    )
+
+    snapshot = service.catalog_status()
+
+    assert snapshot == {
+        "persistent_catalog": False,
+        "demo_fallback_allowed": True,
+        "demo_catalog_available": True,
+        "selected_source": "demo",
+    }

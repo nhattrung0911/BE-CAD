@@ -27,6 +27,24 @@ class DatabaseCatalogSource:
             return CatalogRepository(session).get_variant(variant_id)
 
 
+class CatalogStatusSnapshot(dict):
+    @property
+    def has_persistent_catalog(self) -> bool:
+        return bool(self["persistent_catalog"])
+
+    @property
+    def demo_fallback_allowed(self) -> bool:
+        return bool(self["demo_fallback_allowed"])
+
+    @property
+    def demo_catalog_available(self) -> bool:
+        return bool(self["demo_catalog_available"])
+
+    @property
+    def selected_source(self) -> str:
+        return str(self["selected_source"])
+
+
 class ProductService:
     def __init__(
         self,
@@ -73,19 +91,31 @@ class ProductService:
         }
 
     def has_persistent_catalog_data(self) -> bool:
-        return self.catalog_source.has_products()
+        return self.catalog_status().has_persistent_catalog
 
     def has_catalog_data(self) -> bool:
-        if self.has_persistent_catalog_data():
-            return True
-        if self._allow_demo_fallback():
-            return self.demo_catalog_source.has_products()
-        return False
+        snapshot = self.catalog_status()
+        return snapshot.has_persistent_catalog or (
+            snapshot.demo_fallback_allowed and snapshot.demo_catalog_available
+        )
+
+    def catalog_status(self) -> CatalogStatusSnapshot:
+        persistent_catalog = self.catalog_source.has_products()
+        demo_fallback_allowed = self._allow_demo_fallback()
+        demo_catalog_available = self.demo_catalog_source.has_products() if demo_fallback_allowed else False
+        selected_source = "persistent" if persistent_catalog else "demo" if demo_catalog_available else "persistent"
+        return CatalogStatusSnapshot(
+            persistent_catalog=persistent_catalog,
+            demo_fallback_allowed=demo_fallback_allowed,
+            demo_catalog_available=demo_catalog_available,
+            selected_source=selected_source,
+        )
 
     def _selected_source(self):
-        if self.catalog_source.has_products():
+        snapshot = self.catalog_status()
+        if snapshot.has_persistent_catalog:
             return self.catalog_source
-        if self._allow_demo_fallback():
+        if snapshot.demo_fallback_allowed and snapshot.demo_catalog_available:
             return self.demo_catalog_source
         return self.catalog_source
 

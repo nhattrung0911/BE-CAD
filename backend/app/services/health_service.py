@@ -45,6 +45,7 @@ def _check_redis() -> str:
 
 
 def _check_catalog() -> str:
+    snapshot = product_service.catalog_status()
     if settings.environment == "production":
-        return "ok" if product_service.has_persistent_catalog_data() else "empty"
-    return "ok" if product_service.has_catalog_data() else "empty"
+        return "ok" if snapshot.has_persistent_catalog else "empty"
+    return "ok" if snapshot.has_persistent_catalog or (snapshot.demo_fallback_allowed and snapshot.demo_catalog_available) else "empty"
