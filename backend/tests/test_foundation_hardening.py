@@ -7,8 +7,10 @@ from app.core.config import Settings, settings
 from app.core.database import Base, engine, should_auto_create_schema
 from app.main import app
 from app.services.cache_service import InMemoryCache, cache
+from app.services.demo_catalog import DemoCatalogSource
 from app.services.product_service import ProductService
 from app.services.storage import LocalStorage
+from app.workers import tasks as worker_tasks
 from app.workers.tasks import dispatch_generation_job, get_celery_app
 
 
@@ -225,13 +227,14 @@ def test_expired_key_removed_from_dict():
     assert "k" not in cache_impl._data
 
 
-def test_dispatch_without_redis_logs_warning_not_raises(caplog):
+def test_dispatch_without_redis_logs_warning_not_raises(monkeypatch):
     original_redis_url = settings.redis_url
     settings.redis_url = None
+    warnings = []
     try:
-        with caplog.at_level(logging.WARNING):
-            dispatch_generation_job("preview_fast", "test-job-123")
-        assert "No REDIS_URL" in caplog.text
+        monkeypatch.setattr(worker_tasks.logger, "warning", lambda message, job_id: warnings.append((message, job_id)))
+        dispatch_generation_job("preview_fast", "test-job-123")
+        assert warnings == [("No REDIS_URL configured - skipping async dispatch of job %s", "test-job-123")]
     finally:
         settings.redis_url = original_redis_url
 
@@ -274,15 +277,15 @@ def test_ingest_2d_accepts_valid_admin_key():
 
 
 def test_product_service_variant_lookup_is_cached(monkeypatch):
-    service = ProductService()
+    service = ProductService(catalog_source=DemoCatalogSource(), allow_demo_fallback=False)
     call_count = {"count": 0}
-    original = ProductService.list_variants
+    original = DemoCatalogSource.list_variants
 
     def counting_list_variants(self, product_id):
         call_count["count"] += 1
         return original(self, product_id)
 
-    monkeypatch.setattr(ProductService, "list_variants", counting_list_variants)
+    monkeypatch.setattr(DemoCatalogSource, "list_variants", counting_list_variants)
 
     first = service.get_variant("hex-bolt-iso4014-m8x30")
     second = service.get_variant("hex-bolt-iso4014-m8x30")

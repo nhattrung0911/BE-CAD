@@ -88,9 +88,25 @@ Rules:
 
 ## Catalog Model
 
-Current catalog data lives in `backend/app/services/product_service.py` as an MVP seed.
+Persistent catalog truth now lives in database-backed master data tables:
 
-When scaling to tens of thousands of SKUs, migrate catalog truth into database-backed master data with:
+- `catalog_products`
+- `catalog_parameter_specs`
+- `catalog_variants`
+
+The demo seed still exists for local/dev fallback through `backend/app/services/demo_catalog.py`.
+
+Operator flow:
+
+```powershell
+cd backend
+python -m alembic upgrade head
+python -m app.bootstrap.seed_catalog
+```
+
+In production, `/ready` must stay `503` with `"catalog": "empty"` until persistent catalog data exists.
+
+For scale-up to tens of thousands of SKUs, extend this master-data model with:
 
 - product family;
 - standard;
@@ -157,8 +173,8 @@ Add tests for every behavior change. Foundation risks should be covered in `back
 These are planned scale-up areas, not permission to bypass current contracts:
 
 - production frontend is not included;
-- catalog master data is currently seeded in code;
-- metrics are internal JSON counters, not full Prometheus exposition yet;
+- catalog import beyond the demo seed is not implemented yet;
+- metrics are Prometheus-style text counters, but not a full labeled metrics stack yet;
 - rate limiting is not implemented yet;
 - auth is API-key based for admin ingestion and should later move to stronger RBAC/OIDC.
 

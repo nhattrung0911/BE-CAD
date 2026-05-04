@@ -25,6 +25,7 @@ def test_ready_checks_database_and_storage_backends():
             "database": "ok",
             "artifact_storage": "ok",
             "raw_asset_storage": "ok",
+            "catalog": "ok",
         },
     }
 

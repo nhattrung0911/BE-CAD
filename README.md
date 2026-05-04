@@ -73,7 +73,7 @@ Viewer auto-fits camera to the model bounding box; it must not resize a model to
 - `GET /api/v1/model-jobs/{job_id}` returns queue state, failure details, and the generated artifact once available.
 - Vendor 3D ingestion at `POST /api/v1/vendor-assets` for STEP/STL/GLB with checksum, raw storage, license status, and validation status.
 - 2D metadata ingestion at `POST /api/v1/ingest/2d` for dimension labels such as `h:6.8-7.2`, `d1:12.8-13.2`, `OD:99.8-100.2`, plus unit/material/standard/size/name/surface/barcode text.
-- Request ID logging, `/health`, real `/ready` dependency checks, and placeholder `/metrics`.
+- Request ID logging, `/health`, real `/ready` dependency checks including catalog readiness, and Prometheus-style `/metrics`.
 - Frontend contract routes for size pickers and Three.js viewers:
   - `GET /api/v1/products/{product_id}/variants`
   - `GET /api/v1/geometry/variant/{variant_id}?lod=low|medium|high`
@@ -97,15 +97,26 @@ With `MODEL_SYNC_GENERATION=false`, uncached resolver requests create a model jo
 ```bash
 cd backend
 PYTHONPATH=. alembic upgrade head
+PYTHONPATH=. python -m app.bootstrap.seed_catalog
 PYTHONPATH=. pytest -q -p no:cacheprovider
 PYTHONPATH=. python scripts/local_smoke.py
 PYTHONPATH=. python scripts/pregenerate_top_skus.py --input ../data/top_skus.example.json
 ```
 
+Production catalog bootstrap is explicit:
+
+1. Run Alembic migrations.
+2. Seed or import the catalog master data.
+3. Start the API and check `/ready`.
+
+The API now reports catalog readiness directly. In production, `/ready` returns `503` with `"catalog": "empty"` until the persistent catalog is loaded. Local/dev keeps the demo catalog fallback so FE demo and tests stay light.
+
 On Windows PowerShell from `final/backend`:
 
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE='1'
+python -m alembic upgrade head
+python -m app.bootstrap.seed_catalog
 python -m pytest -q -p no:cacheprovider
 python scripts/local_smoke.py
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000

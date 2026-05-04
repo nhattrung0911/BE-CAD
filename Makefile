@@ -1,4 +1,4 @@
-.PHONY: test api worker migrate pregenerate
+.PHONY: test api worker migrate seed-catalog pregenerate
 
 test:
 	cd backend && PYTHONPATH=. pytest -q -p no:cacheprovider
@@ -11,6 +11,9 @@ worker:
 
 migrate:
 	cd backend && PYTHONPATH=. alembic upgrade head
+
+seed-catalog:
+	cd backend && PYTHONPATH=. python -m app.bootstrap.seed_catalog
 
 pregenerate:
 	cd backend && PYTHONPATH=. python scripts/pregenerate_top_skus.py --input ../data/top_skus.example.json

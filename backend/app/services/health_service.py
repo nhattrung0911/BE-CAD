@@ -3,6 +3,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.services.cache_service import cache
+from app.services.product_service import product_service
 from app.services.storage import make_artifact_storage, make_raw_asset_storage
 
 
@@ -11,6 +12,7 @@ def readiness_payload() -> tuple[int, dict]:
         "database": _check_database(),
         "artifact_storage": _check_storage(make_artifact_storage),
         "raw_asset_storage": _check_storage(make_raw_asset_storage),
+        "catalog": _check_catalog(),
     }
     if settings.require_redis_for_ready:
         checks["redis"] = _check_redis()
@@ -40,3 +42,9 @@ def _check_redis() -> str:
     if not settings.redis_url:
         return "missing"
     return "ok" if cache.is_connected() else "error"
+
+
+def _check_catalog() -> str:
+    if settings.environment == "production":
+        return "ok" if product_service.has_persistent_catalog_data() else "empty"
+    return "ok" if product_service.has_catalog_data() else "empty"

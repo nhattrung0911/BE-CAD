@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -70,3 +70,56 @@ class ParsedDrawing(TimestampMixin, Base):
     dimensions_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     raw_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class CatalogProduct(TimestampMixin, Base):
+    __tablename__ = "catalog_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    standard: Mapped[str] = mapped_column(String(64), nullable=False)
+    family: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    unit: Mapped[str] = mapped_column(String(16), default="mm", nullable=False)
+
+
+class CatalogParameterSpec(TimestampMixin, Base):
+    __tablename__ = "catalog_parameter_specs"
+    __table_args__ = (UniqueConstraint("product_id", "name", name="uq_catalog_parameter_specs_product_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("catalog_products.product_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    type: Mapped[str] = mapped_column(String(32), default="number", nullable=False)
+    unit: Mapped[str] = mapped_column(String(16), default="mm", nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    values_json: Mapped[list | None] = mapped_column(JSON)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class CatalogVariant(TimestampMixin, Base):
+    __tablename__ = "catalog_variants"
+    __table_args__ = (
+        UniqueConstraint("variant_id", name="uq_catalog_variants_variant_id"),
+        UniqueConstraint("sku", name="uq_catalog_variants_sku"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    variant_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    product_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("catalog_products.product_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    sku: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    diameter_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    params_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    material: Mapped[str] = mapped_column(String(64), default="steel", nullable=False)
