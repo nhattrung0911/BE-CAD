@@ -25,13 +25,32 @@ class ArtifactService:
         source: str,
         metadata: dict | None = None,
     ) -> dict:
-        stored = self.put_bytes(key, data)
         with SessionLocal() as session:
             repo = ArtifactRepository(session)
             existing = repo.find_resolved_model(product_id, params_hash, fmt, quality)
             if existing:
+                if self.exists(existing.storage_key):
+                    session.commit()
+                    return {
+                        "storage_key": existing.storage_key,
+                        "url": f"{settings.public_artifact_prefix}/{existing.storage_key}",
+                        "sha256": existing.sha256,
+                        "file_size": existing.file_size,
+                        "artifact_id": existing.id,
+                    }
+
+                stored = self.put_bytes(existing.storage_key, data)
+                repo.update_blob_metadata(
+                    existing,
+                    storage_key=stored["storage_key"],
+                    sha256=stored["sha256"],
+                    file_size=stored["file_size"],
+                    metadata=metadata,
+                )
                 session.commit()
                 return {**stored, "artifact_id": existing.id}
+
+            stored = self.put_bytes(key, data)
             artifact = repo.create(
                 product_id=product_id,
                 artifact_type="model",

@@ -4,9 +4,11 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine
+from app.db.models import Artifact
 from app.main import app
 from app.repositories.artifacts import ArtifactRepository
 from app.repositories.vendor_assets import VendorAssetRepository
+from app.services.artifact_service import ArtifactService
 from app.services.cache_service import cache
 from app.services.jobs import QUEUE_BATCH_PREGENERATE, QUEUE_PREVIEW_FAST, enqueue_generation_job
 
@@ -183,3 +185,125 @@ def test_2d_ingestion_extracts_dimensions_and_metadata():
     assert body["metadata"]["unit"] == "mm"
     assert body["metadata"]["material"] == "65Mn"
     assert body["metadata"]["barcode"] == "6901234567890"
+
+
+def test_put_generated_model_reuses_existing_artifact_without_rewriting_storage():
+    class FakeStorage:
+        def __init__(self) -> None:
+            self.write_calls = 0
+            self.objects = {}
+
+        def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> dict:
+            import hashlib
+
+            self.write_calls += 1
+            self.objects[key] = data
+            return {
+                "storage_key": key,
+                "url": f"/artifacts/{key}",
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "file_size": len(data),
+                "content_type": content_type,
+            }
+
+        def exists(self, key: str) -> bool:
+            return key in self.objects
+
+        def read_bytes(self, key: str) -> bytes:
+            return self.objects[key]
+
+    storage = FakeStorage()
+    service = ArtifactService(storage=storage)
+    payload = b"solid-bytes"
+
+    first = service.put_generated_model(
+        product_id="washer-iso7089",
+        params_hash="hash-one",
+        fmt="glb",
+        quality="preview",
+        key="washer/hash-one/preview.glb",
+        data=payload,
+        source="generated_parametric",
+        metadata={"generator": "fake"},
+    )
+    second = service.put_generated_model(
+        product_id="washer-iso7089",
+        params_hash="hash-one",
+        fmt="glb",
+        quality="preview",
+        key="washer/hash-one/preview.glb",
+        data=payload,
+        source="generated_parametric",
+        metadata={"generator": "fake"},
+    )
+
+    assert first["artifact_id"] == second["artifact_id"]
+    assert storage.write_calls == 1
+
+
+def test_put_generated_model_repairs_missing_storage_without_creating_new_artifact():
+    class FakeStorage:
+        def __init__(self) -> None:
+            self.write_calls = 0
+            self.objects = {}
+
+        def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> dict:
+            import hashlib
+
+            self.write_calls += 1
+            self.objects[key] = data
+            return {
+                "storage_key": key,
+                "url": f"/artifacts/{key}",
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "file_size": len(data),
+                "content_type": content_type,
+            }
+
+        def exists(self, key: str) -> bool:
+            return key in self.objects
+
+        def read_bytes(self, key: str) -> bytes:
+            return self.objects[key]
+
+    storage = FakeStorage()
+    service = ArtifactService(storage=storage)
+    payload = b"repair-bytes"
+
+    first = service.put_generated_model(
+        product_id="washer-iso7089",
+        params_hash="hash-two",
+        fmt="glb",
+        quality="preview",
+        key="washer/hash-two/preview.glb",
+        data=payload,
+        source="generated_parametric",
+        metadata={"generator": "fake"},
+    )
+    storage.objects.clear()
+
+    repaired = service.put_generated_model(
+        product_id="washer-iso7089",
+        params_hash="hash-two",
+        fmt="glb",
+        quality="preview",
+        key="washer/hash-two/preview.glb",
+        data=payload,
+        source="generated_parametric",
+        metadata={"generator": "fake"},
+    )
+
+    assert first["artifact_id"] == repaired["artifact_id"]
+    assert storage.write_calls == 2
+    with SessionLocal() as session:
+        persisted = ArtifactRepository(session).find_resolved_model(
+            product_id="washer-iso7089",
+            params_hash="hash-two",
+            fmt="glb",
+            quality="preview",
+        )
+        artifact_count = session.query(Artifact).count()
+
+    assert persisted is not None
+    assert persisted.id == first["artifact_id"]
+    assert artifact_count == 1

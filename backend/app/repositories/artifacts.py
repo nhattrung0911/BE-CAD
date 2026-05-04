@@ -61,3 +61,20 @@ class ArtifactRepository:
         if quality is not None:
             stmt = stmt.where(Artifact.quality == quality)
         return self.session.scalar(stmt)
+
+    def update_blob_metadata(
+        self,
+        artifact: Artifact,
+        *,
+        storage_key: str,
+        sha256: str,
+        file_size: int,
+        metadata: dict | None = None,
+    ) -> Artifact:
+        artifact.storage_key = storage_key
+        artifact.sha256 = sha256
+        artifact.file_size = file_size
+        if metadata is not None:
+            artifact.metadata_json = metadata
+        self.session.flush()
+        return artifact
