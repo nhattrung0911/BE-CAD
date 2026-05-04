@@ -53,7 +53,18 @@ class ModelResolver:
                 )
                 return ModelResolveResponse(status="ready", artifact=artifact_response, cache="hit", source="cache_db")
 
-            vendor = VendorAssetRepository(session).find_exact(request.product_id, request.format)
+            vendor_repo = VendorAssetRepository(session)
+            # Variant-specific override takes priority over product-level vendor file.
+            vendor = None
+            vendor_source = None
+            if request.variant_id:
+                vendor = vendor_repo.find_for_variant(request.variant_id, request.format)
+                if vendor:
+                    vendor_source = "vendor_variant"
+            if vendor is None:
+                vendor = vendor_repo.find_exact(request.product_id, request.format)
+                if vendor:
+                    vendor_source = "vendor_exact"
             if vendor:
                 artifact_response = self._artifact_response(
                     fmt=vendor.format,
@@ -64,12 +75,17 @@ class ModelResolver:
                 )
                 cache.set(
                     cache_key,
-                    {"artifact": artifact_response.model_dump(), "source": "vendor_exact"},
+                    {"artifact": artifact_response.model_dump(), "source": vendor_source},
                     ttl_seconds=MODEL_CACHE_TTL,
                 )
-                return ModelResolveResponse(status="ready", artifact=artifact_response, cache="miss", source="vendor_exact")
+                return ModelResolveResponse(status="ready", artifact=artifact_response, cache="miss", source=vendor_source)
 
-        lock = cache.acquire_lock(f"lock:{cache_key}", ttl_seconds=120)
+        lock_ttl = (
+            settings.inline_lock_ttl_seconds
+            if self._may_generate_inline(request)
+            else settings.queued_lock_ttl_seconds
+        )
+        lock = cache.acquire_lock(f"lock:{cache_key}", ttl_seconds=lock_ttl)
         if lock is None:
             from app.workers.tasks import ensure_async_dispatch_available
 

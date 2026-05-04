@@ -11,6 +11,7 @@ ValidationStatus = Literal["pending", "valid", "invalid"]
 class VendorAssetResponse(BaseModel):
     id: int
     product_id: str
+    variant_id: str | None = None
     format: AssetFormat
     filename: str
     storage_key: str

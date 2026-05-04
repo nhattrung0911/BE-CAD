@@ -39,6 +39,7 @@ def _resolve_geometry(
         resolved = model_resolver.resolve(
             ModelResolveRequest(
                 product_id=product_id,
+                variant_id=variant_id,
                 params=resolver_params,
                 format="glb",
                 quality="preview",

@@ -1,9 +1,12 @@
+import logging
 import time
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 MODEL_CACHE_TTL = 86_400
 LOCK_TTL_SECONDS = 120
@@ -119,7 +122,8 @@ class RedisCache:
             return False
         try:
             return bool(self.client.ping())
-        except Exception:
+        except Exception as exc:
+            logger.warning("redis ping failed (url=%s): %s", settings.redis_url, exc)
             return False
 
 

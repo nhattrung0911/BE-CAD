@@ -36,6 +36,7 @@ class VendorAsset(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     product_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    variant_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     format: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)

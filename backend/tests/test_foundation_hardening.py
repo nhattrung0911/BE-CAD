@@ -428,6 +428,54 @@ def test_ingest_2d_accepts_valid_admin_key():
     assert response.status_code == 200
 
 
+def test_ingest_2d_rejects_path_traversal_product_id():
+    settings.admin_api_key = "test-admin-key"
+    response = client.post(
+        "/api/v1/ingest/2d",
+        headers={"X-Admin-API-Key": "test-admin-key"},
+        json={"product_id": "../etc/passwd", "content": "x"},
+    )
+    assert response.status_code == 422
+
+
+def test_ingest_2d_caps_content_length():
+    settings.admin_api_key = "test-admin-key"
+    huge = "x" * (settings.max_drawing_content_chars + 1)
+    response = client.post(
+        "/api/v1/ingest/2d",
+        headers={"X-Admin-API-Key": "test-admin-key"},
+        json={"product_id": "hex-bolt-iso4014", "content": huge},
+    )
+    assert response.status_code == 422
+
+
+def test_ingest_2d_upload_multipart_accepts_svg_for_operators():
+    """Engineers without coding skills upload via multipart drag/drop."""
+    settings.admin_api_key = "test-admin-key"
+    svg = b"<svg><text>d:8.0-8.2</text><text>L:30.0</text></svg>"
+    response = client.post(
+        "/api/v1/ingest/2d/upload",
+        headers={"X-Admin-API-Key": "test-admin-key"},
+        data={"product_id": "hex-bolt-iso4014"},
+        files={"file": ("hex-bolt.svg", svg, "image/svg+xml")},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["product_id"] == "hex-bolt-iso4014"
+    assert "d" in body["dimensions"]
+
+
+def test_ingest_2d_upload_rejects_unknown_extension():
+    settings.admin_api_key = "test-admin-key"
+    response = client.post(
+        "/api/v1/ingest/2d/upload",
+        headers={"X-Admin-API-Key": "test-admin-key"},
+        data={"product_id": "hex-bolt-iso4014"},
+        files={"file": ("evil.exe", b"MZ\x00", "application/octet-stream")},
+    )
+    assert response.status_code == 400
+
+
 def test_product_service_variant_lookup_is_cached(monkeypatch):
     service = ProductService(catalog_source=DemoCatalogSource(), allow_demo_fallback=False)
     call_count = {"count": 0}

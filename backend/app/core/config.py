@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     template_version: str = "cadquery-glb-v1"
     model_sync_generation: bool = True
     request_id_header: str = "X-Request-ID"
-    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
+    max_drawing_content_chars: int = 2_000_000
+    inline_lock_ttl_seconds: int = 60
+    queued_lock_ttl_seconds: int = 600
     admin_api_key: str | None = None
     admin_api_key_header: str = "X-Admin-API-Key"
     auto_create_schema: bool = True
@@ -47,6 +50,14 @@ class Settings(BaseSettings):
                 )
             if not self.admin_api_key:
                 raise ValueError("ADMIN_API_KEY must be set in production.")
+            if len(self.admin_api_key) < 32:
+                raise ValueError("ADMIN_API_KEY must be at least 32 characters in production.")
+            for origin in self.cors_origins:
+                if origin == "*" or origin == "null":
+                    raise ValueError(
+                        "CORS_ALLOW_ORIGINS must list exact frontend origins in production "
+                        "(no wildcard '*' or 'null')."
+                    )
         return self
 
 

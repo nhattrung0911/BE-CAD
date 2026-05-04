@@ -35,6 +35,31 @@ def test_local_frontend_origin_is_allowed_by_cors():
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
 
 
+def test_preview_port_origin_is_allowed_by_cors():
+    preview_response = client.options(
+        "/api/v1/products/hex-bolt-iso4014/variants",
+        headers={
+            "Origin": "http://127.0.0.1:4173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert preview_response.status_code == 200
+    assert preview_response.headers["access-control-allow-origin"] == "http://127.0.0.1:4173"
+
+
+def test_null_origin_is_not_allowed_by_default_cors():
+    """file:// pages send Origin: null. Default config must NOT trust them."""
+    response = client.options(
+        "/api/v1/products/hex-bolt-iso4014/variants",
+        headers={
+            "Origin": "null",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.headers.get("access-control-allow-origin") != "null"
+
+
 def test_hex_nut_variants_endpoint_exposes_iso4032_dimensions():
     response = client.get("/api/v1/products/hex-nut-iso4032/variants")
 

@@ -8,7 +8,7 @@ from app.core.database import engine
 
 
 BASELINE_REVISION = "20260429_0001"
-HEAD_REVISION = "20260504_0003"
+HEAD_REVISION = "20260505_0004"
 LEGACY_BASELINE_TABLES = {
     "artifacts",
     "vendor_assets",

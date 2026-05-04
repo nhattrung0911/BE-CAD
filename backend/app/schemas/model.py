@@ -8,6 +8,7 @@ ModelQuality = Literal["preview", "engineering"]
 
 class ModelResolveRequest(BaseModel):
     product_id: str
+    variant_id: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     format: ModelFormat = "glb"
     quality: ModelQuality = "preview"

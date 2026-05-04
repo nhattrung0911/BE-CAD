@@ -1,4 +1,6 @@
 backend/storage/
+backend/tests/_csv_fixtures/
+docs/research/
 backend/*.log
 frontend-demo/*.log
 backend/.pytest_cache/

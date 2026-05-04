@@ -8,13 +8,13 @@
     "preview": "vite preview --host 0.0.0.0 --port 4173"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "three": "latest",
-    "@react-three/fiber": "latest",
-    "@react-three/drei": "latest"
+    "@react-three/drei": "10.7.7",
+    "@react-three/fiber": "9.6.1",
+    "@vitejs/plugin-react": "6.0.1",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "three": "0.184.0",
+    "vite": "8.0.10"
   },
   "devDependencies": {}
 }
