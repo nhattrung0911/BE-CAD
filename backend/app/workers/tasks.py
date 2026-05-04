@@ -36,12 +36,21 @@ def get_celery_app():
         broker=settings.redis_url,
         backend=settings.redis_url,
     )
-    _celery_app.conf.task_routes = {
-        "app.workers.tasks.generate_preview": {"queue": QUEUE_PREVIEW_FAST},
-        "app.workers.tasks.generate_cad": {"queue": QUEUE_CAD_GENERATE},
-        "app.workers.tasks.generate_engineering_step": {"queue": QUEUE_ENGINEERING_STEP},
-        "app.workers.tasks.batch_pregenerate": {"queue": QUEUE_BATCH_PREGENERATE},
-    }
+    _celery_app.conf.update(
+        task_serializer="json",
+        result_serializer="json",
+        accept_content=["json"],
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
+        worker_prefetch_multiplier=1,
+        broker_connection_retry_on_startup=True,
+        task_routes={
+            "app.workers.tasks.generate_preview": {"queue": QUEUE_PREVIEW_FAST},
+            "app.workers.tasks.generate_cad": {"queue": QUEUE_CAD_GENERATE},
+            "app.workers.tasks.generate_engineering_step": {"queue": QUEUE_ENGINEERING_STEP},
+            "app.workers.tasks.batch_pregenerate": {"queue": QUEUE_BATCH_PREGENERATE},
+        },
+    )
     return _celery_app
 
 
@@ -87,3 +96,8 @@ def dispatch_generation_job(queue_name: str, job_id: str) -> None:
     }
     task = task_by_queue[queue_name]
     task.apply_async(args=[job_id], queue=queue_name)
+
+
+def reset_celery_for_testing() -> None:
+    global _celery_app
+    _celery_app = None

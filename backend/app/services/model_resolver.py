@@ -6,7 +6,7 @@ from app.cad.backends import get_cad_backend
 from app.repositories.artifacts import ArtifactRepository
 from app.repositories.vendor_assets import VendorAssetRepository
 from app.services.artifact_service import artifact_service
-from app.services.cache_service import cache
+from app.services.cache_service import MODEL_CACHE_TTL, cache
 from app.services.hash_service import stable_params_hash
 from app.services.jobs import enqueue_generation_job, queue_for_request
 from app.services.observability import record_inline_generation
@@ -49,7 +49,7 @@ class ModelResolver:
                 cache.set(
                     cache_key,
                     {"artifact": artifact_response.model_dump(), "source": "cache_db"},
-                    ttl_seconds=settings.model_cache_ttl_seconds,
+                    ttl_seconds=MODEL_CACHE_TTL,
                 )
                 return ModelResolveResponse(status="ready", artifact=artifact_response, cache="hit", source="cache_db")
 
@@ -65,7 +65,7 @@ class ModelResolver:
                 cache.set(
                     cache_key,
                     {"artifact": artifact_response.model_dump(), "source": "vendor_exact"},
-                    ttl_seconds=settings.model_cache_ttl_seconds,
+                    ttl_seconds=MODEL_CACHE_TTL,
                 )
                 return ModelResolveResponse(status="ready", artifact=artifact_response, cache="miss", source="vendor_exact")
 
@@ -124,7 +124,7 @@ class ModelResolver:
             cache.set(
                 cache_key,
                 {"artifact": artifact_response, "source": "generated_parametric"},
-                ttl_seconds=settings.model_cache_ttl_seconds,
+                ttl_seconds=MODEL_CACHE_TTL,
             )
             return ModelResolveResponse(
                 status="ready",

@@ -5,6 +5,9 @@ from typing import Any
 
 from app.core.config import settings
 
+MODEL_CACHE_TTL = 86_400
+LOCK_TTL_SECONDS = 120
+
 
 @dataclass
 class CacheEntry:
@@ -34,12 +37,12 @@ class InMemoryCache:
                 return None
             return entry.value
 
-    def set(self, key: str, value: Any, ttl_seconds: int | None = None) -> None:
+    def set(self, key: str, value: Any, ttl_seconds: int | None = MODEL_CACHE_TTL) -> None:
         expires_at = time.monotonic() + ttl_seconds if ttl_seconds is not None else None
         with self._mutex:
             self._data[key] = CacheEntry(value=value, expires_at=expires_at)
 
-    def acquire_lock(self, key: str, ttl_seconds: int = 60) -> LockToken | None:
+    def acquire_lock(self, key: str, ttl_seconds: int = LOCK_TTL_SECONDS) -> LockToken | None:
         with self._mutex:
             if key in self._locks:
                 return None
@@ -66,7 +69,12 @@ class RedisCache:
         try:
             import redis
 
-            self.client = redis.Redis.from_url(url, decode_responses=False)
+            self.client = redis.Redis.from_url(
+                url,
+                decode_responses=False,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+            )
             self.client.ping()
         except Exception as exc:
             if self._strict:
@@ -84,14 +92,14 @@ class RedisCache:
         raw = self.client.get(key)
         return json.loads(raw) if raw else None
 
-    def set(self, key: str, value: Any, ttl_seconds: int | None = None) -> None:
+    def set(self, key: str, value: Any, ttl_seconds: int | None = MODEL_CACHE_TTL) -> None:
         if self.client is None:
             return self.fallback.set(key, value, ttl_seconds)
         import json
 
         self.client.set(key, json.dumps(value), ex=ttl_seconds)
 
-    def acquire_lock(self, key: str, ttl_seconds: int = 60) -> LockToken | None:
+    def acquire_lock(self, key: str, ttl_seconds: int = LOCK_TTL_SECONDS) -> LockToken | None:
         if self.client is None:
             return self.fallback.acquire_lock(key, ttl_seconds)
         ok = self.client.set(key, "1", nx=True, ex=ttl_seconds)

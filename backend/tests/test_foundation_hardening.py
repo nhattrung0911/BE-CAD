@@ -14,7 +14,7 @@ from app.services.observability import reset_metrics
 from app.services.product_service import ProductService
 from app.services.storage import LocalStorage
 from app.workers import tasks as worker_tasks
-from app.workers.tasks import dispatch_generation_job, get_celery_app
+from app.workers.tasks import dispatch_generation_job, get_celery_app, reset_celery_for_testing
 
 
 client = TestClient(app)
@@ -279,6 +279,18 @@ def test_in_memory_cache_no_ttl_does_not_expire():
     assert cache_impl.get("k") == "v"
 
 
+def test_in_memory_cache_default_ttl_is_24h():
+    from app.services.cache_service import MODEL_CACHE_TTL
+
+    cache_impl = InMemoryCache()
+    cache_impl.set("k", "v")
+    entry = cache_impl._data["k"]
+    remaining = entry.expires_at - time.monotonic()
+
+    assert MODEL_CACHE_TTL == 86_400
+    assert 86390 < remaining <= 86400
+
+
 def test_expired_key_removed_from_dict():
     cache_impl = InMemoryCache()
     cache_impl.set("k", "v", ttl_seconds=1)
@@ -291,11 +303,13 @@ def test_dispatch_without_redis_raises():
     original_redis_url = settings.redis_url
     settings.redis_url = None
     try:
+        reset_celery_for_testing()
         with pytest.raises(RuntimeError) as exc:
             dispatch_generation_job("preview_fast", "test-job-123")
         assert "REDIS_URL is required" in str(exc.value)
     finally:
         settings.redis_url = original_redis_url
+        reset_celery_for_testing()
 
 
 def test_model_resolve_returns_503_when_async_dispatch_is_unavailable():
@@ -350,6 +364,7 @@ def test_get_celery_app_raises_without_redis():
     original_redis_url = settings.redis_url
     settings.redis_url = None
     try:
+        reset_celery_for_testing()
         try:
             get_celery_app()
         except RuntimeError as exc:
@@ -358,6 +373,36 @@ def test_get_celery_app_raises_without_redis():
             raise AssertionError("Expected get_celery_app to require Redis")
     finally:
         settings.redis_url = original_redis_url
+        reset_celery_for_testing()
+
+
+def test_get_celery_app_sets_safe_worker_defaults():
+    original_redis_url = settings.redis_url
+    original_celery = worker_tasks.Celery
+
+    class FakeCeleryApp:
+        def __init__(self, name, broker=None, backend=None):
+            self.name = name
+            self.broker = broker
+            self.backend = backend
+            self.conf = {}
+
+        def task(self, fn):
+            return fn
+
+    settings.redis_url = "redis://fake"
+    worker_tasks.Celery = FakeCeleryApp
+    reset_celery_for_testing()
+    try:
+        app_instance = get_celery_app()
+        assert app_instance.conf["task_serializer"] == "json"
+        assert app_instance.conf["task_acks_late"] is True
+        assert app_instance.conf["worker_prefetch_multiplier"] == 1
+        assert app_instance.conf["broker_connection_retry_on_startup"] is True
+    finally:
+        settings.redis_url = original_redis_url
+        worker_tasks.Celery = original_celery
+        reset_celery_for_testing()
 
 
 def test_ingest_2d_requires_admin_key_when_configured():
