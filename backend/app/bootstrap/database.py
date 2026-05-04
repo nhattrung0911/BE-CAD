@@ -8,7 +8,7 @@ from app.core.database import engine
 
 
 BASELINE_REVISION = "20260429_0001"
-HEAD_REVISION = "20260504_0002"
+HEAD_REVISION = "20260504_0003"
 LEGACY_BASELINE_TABLES = {
     "artifacts",
     "vendor_assets",
@@ -19,6 +19,7 @@ CURRENT_HEAD_TABLES = LEGACY_BASELINE_TABLES | {
     "catalog_products",
     "catalog_parameter_specs",
     "catalog_variants",
+    "geometry_cache_metrics",
 }
 
 

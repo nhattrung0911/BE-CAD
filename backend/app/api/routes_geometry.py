@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.domain.geometry_hashes import params_for_lod
 from app.repositories.artifacts import ArtifactRepository
+from app.repositories.geometry_metrics import GeometryCacheMetricsRepository
 from app.schemas.geometry import GeometryGenerateRequest, GeometryLod, GeometryResponse
 from app.schemas.model import ModelResolveRequest
 from app.services.artifact_service import artifact_service
@@ -48,6 +49,14 @@ def _resolve_geometry(
     record_cache_result(cache_status=resolved.cache, metrics=http_request.app.state.metrics)
     if resolved.status == "queued":
         record_job_queued(http_request.app.state.metrics)
+    with SessionLocal() as session:
+        GeometryCacheMetricsRepository(session).upsert(
+            params_hash=params_hash,
+            product_id=product_id,
+            lod=lod,
+            file_size_bytes=None if resolved.artifact is None else resolved.artifact.file_size,
+        )
+        session.commit()
     return GeometryResponse(
         status=resolved.status,
         hash=params_hash,

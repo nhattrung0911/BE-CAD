@@ -136,3 +136,16 @@ class CatalogVariant(TimestampMixin, Base):
     params_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     material: Mapped[str] = mapped_column(String(64), default="steel", nullable=False)
     product: Mapped["CatalogProduct"] = relationship(back_populates="variants")
+
+
+class GeometryCacheMetrics(Base):
+    __tablename__ = "geometry_cache_metrics"
+
+    params_hash: Mapped[str] = mapped_column(String(96), primary_key=True)
+    product_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    lod: Mapped[str] = mapped_column(String(16), nullable=False)
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    generation_ms: Mapped[int | None] = mapped_column(Integer)
+    access_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    last_accessed: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
