@@ -1,3 +1,5 @@
+import time
+
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.cad.backends import get_cad_backend
@@ -7,6 +9,7 @@ from app.services.artifact_service import artifact_service
 from app.services.cache_service import cache
 from app.services.hash_service import stable_params_hash
 from app.services.jobs import enqueue_generation_job, queue_for_request
+from app.services.observability import record_inline_generation
 from app.services.job_runner import model_artifact_key
 from app.schemas.model import ModelResolveRequest, ModelResolveResponse, ArtifactResponse
 
@@ -97,6 +100,7 @@ class ModelResolver:
                 dispatch_generation_job(job.queue_name, job.job_id)
                 return ModelResolveResponse(status="queued", cache="miss", source="queued_parametric", job_id=job.job_id)
 
+            started_at = time.perf_counter()
             generated = get_cad_backend(settings.cad_backend).generate(request.product_id, request.params, request.format, request.quality)
             artifact = artifact_service.put_generated_model(
                 product_id=request.product_id,
@@ -108,6 +112,8 @@ class ModelResolver:
                 source="generated_parametric",
                 metadata=generated.metadata,
             )
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            record_inline_generation(elapsed_ms=elapsed_ms)
             artifact_response = {
                 "format": request.format,
                 "quality": request.quality,

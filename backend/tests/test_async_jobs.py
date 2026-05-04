@@ -8,6 +8,7 @@ from app.repositories.jobs import JobRepository
 from app.cad.template_base import GeneratedModel
 from app.services.cache_service import cache
 from app.services.jobs import QUEUE_PREVIEW_FAST, enqueue_generation_job
+from app.services.observability import reset_metrics
 from app.workers.tasks import run_generation_job
 
 
@@ -18,6 +19,7 @@ def setup_function():
     cache.clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    app.state.metrics = reset_metrics()
     settings.model_sync_generation = True
     settings.cad_backend = "mock"
 
@@ -138,6 +140,8 @@ def test_worker_marks_job_done_and_persists_artifact():
             quality=persisted.quality,
         )
     assert persisted.result_artifact_id == artifact.id
+    assert app.state.metrics["cad_platform_jobs_completed_total"] == 1
+    assert app.state.metrics["cad_platform_jobs_failed_total"] == 0
 
 
 def test_worker_sets_running_before_generation(monkeypatch):
@@ -184,3 +188,4 @@ def test_worker_marks_job_failed_when_generation_fails():
     assert job["status"] == "failed"
     assert "Missing required params" in job["error_message"]
     assert job["artifact"] is None
+    assert app.state.metrics["cad_platform_jobs_failed_total"] == 1

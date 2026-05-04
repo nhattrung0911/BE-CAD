@@ -9,6 +9,7 @@ from app.schemas.model import ModelResolveRequest
 from app.services.artifact_service import artifact_service
 from app.services.hash_service import stable_params_hash
 from app.services.model_resolver import model_resolver
+from app.services.observability import record_cache_result, record_job_queued
 from app.services.product_service import product_service
 from app.workers.tasks import AsyncDispatchUnavailable
 
@@ -44,9 +45,9 @@ def _resolve_geometry(
         )
     except AsyncDispatchUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    _record_cache_metrics(http_request, resolved.cache)
+    record_cache_result(cache_status=resolved.cache, metrics=http_request.app.state.metrics)
     if resolved.status == "queued":
-        http_request.app.state.metrics["cad_platform_jobs_queued_total"] += 1
+        record_job_queued(http_request.app.state.metrics)
     return GeometryResponse(
         status=resolved.status,
         hash=params_hash,
@@ -98,8 +99,3 @@ def geometry_by_hash(params_hash: str):
             "ETag": f'"{params_hash}"',
         },
     )
-
-
-def _record_cache_metrics(http_request: Request, cache_status: str) -> None:
-    key = "cad_platform_cache_hits_total" if cache_status == "hit" else "cad_platform_cache_misses_total"
-    http_request.app.state.metrics[key] += 1

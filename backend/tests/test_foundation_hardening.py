@@ -10,6 +10,7 @@ from app.core.database import Base, engine, should_auto_create_schema
 from app.main import app
 from app.services.cache_service import InMemoryCache, cache
 from app.services.demo_catalog import DemoCatalogSource
+from app.services.observability import reset_metrics
 from app.services.product_service import ProductService
 from app.services.storage import LocalStorage
 from app.workers import tasks as worker_tasks
@@ -23,6 +24,7 @@ def setup_function():
     cache.clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    app.state.metrics = reset_metrics()
     settings.environment = "local"
     settings.admin_api_key = None
     settings.model_sync_generation = True
@@ -223,6 +225,28 @@ def test_metrics_prometheus_format():
     assert "# TYPE cad_platform_requests_total counter" in response.text
     assert "# HELP cad_platform_cache_hits_total" in response.text
     assert "# HELP cad_platform_cache_misses_total" in response.text
+    assert "# HELP cad_platform_jobs_completed_total" in response.text
+    assert "# HELP cad_platform_jobs_failed_total" in response.text
+    assert "# HELP cad_platform_generate_inline_total" in response.text
+
+
+def test_inline_generation_metrics_increment_on_sync_preview():
+    before_inline = app.state.metrics["cad_platform_generate_inline_total"]
+    before_ms = app.state.metrics["cad_platform_generate_inline_ms_total"]
+
+    response = client.post(
+        "/api/v1/models/resolve",
+        json={
+            "product_id": "hex-bolt-iso4014",
+            "params": {"d": 6, "L": 30, "P": 1, "k": 4, "s": 10, "b": 18},
+            "format": "glb",
+            "quality": "preview",
+        },
+    )
+
+    assert response.status_code == 200
+    assert app.state.metrics["cad_platform_generate_inline_total"] == before_inline + 1
+    assert app.state.metrics["cad_platform_generate_inline_ms_total"] >= before_ms
 
 
 def test_ready_fails_when_redis_is_required_but_unavailable():

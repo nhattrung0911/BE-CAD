@@ -16,18 +16,13 @@ from app.api.routes_products import router as products_router
 from app.api.routes_models import router as models_router
 from app.api.routes_vendor_assets import router as vendor_assets_router
 from app.services.health_service import readiness_payload
+from app.services.observability import record_request, reset_metrics
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("fastener_cad")
 
 app = FastAPI(title=settings.app_name)
-app.state.metrics = {
-    "cad_platform_requests_total": 0,
-    "cad_platform_request_latency_ms_total": 0,
-    "cad_platform_jobs_queued_total": 0,
-    "cad_platform_cache_hits_total": 0,
-    "cad_platform_cache_misses_total": 0,
-}
+app.state.metrics = reset_metrics()
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,8 +53,7 @@ async def request_id_logging(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     elapsed_ms = int((time.perf_counter() - start) * 1000)
-    request.app.state.metrics["cad_platform_requests_total"] += 1
-    request.app.state.metrics["cad_platform_request_latency_ms_total"] += elapsed_ms
+    record_request(elapsed_ms=elapsed_ms, metrics=request.app.state.metrics)
     response.headers[settings.request_id_header] = request_id
     logger.info("request_id=%s method=%s path=%s status=%s elapsed_ms=%s", request_id, request.method, request.url.path, response.status_code, elapsed_ms)
     return response

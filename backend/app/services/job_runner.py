@@ -5,6 +5,7 @@ from app.repositories.artifacts import ArtifactRepository
 from app.repositories.jobs import JobRepository
 from app.services.artifact_service import artifact_service
 from app.services.cache_service import cache
+from app.services.observability import record_job_completed, record_job_failed
 
 
 def model_artifact_key(product_id: str, params_hash: str, quality: str, fmt: str) -> str:
@@ -74,6 +75,7 @@ def run_model_generation_job(job_id: str) -> dict:
                 raise KeyError(f"Model job not found after generation: {job_id}")
             jobs.mark_done(current, artifact_id)
             session.commit()
+        record_job_completed()
         return {"job_id": job_id, "status": "done", "artifact_id": artifact_id}
     except Exception as exc:
         with SessionLocal() as session:
@@ -82,6 +84,7 @@ def run_model_generation_job(job_id: str) -> dict:
             if current is not None:
                 jobs.mark_failed(current, str(exc))
                 session.commit()
+        record_job_failed()
         return {"job_id": job_id, "status": "failed", "error_message": str(exc)}
 
 
