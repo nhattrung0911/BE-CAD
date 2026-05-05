@@ -10,7 +10,7 @@ const LOD_OPTIONS = ['low', 'medium', 'high'];
 const TABS = ['artifact', 'request', 'response', 'job', 'platform', 'ingest'];
 const DIM_KEYS = ['d', 'L', 'P', 'k', 's', 'b', 'm', 'OD', 'ID', 'h', 'thickness'];
 
-function FastenerModel({ url, onBBoxReady, expectedParams }) {
+function FastenerModel({ url, onBBoxReady, expectedParams, hasResolvedAnnotations }) {
   const gltf = useGLTF(url);
   useEffect(() => {
     // Override material so the model is readable without an environment HDR.
@@ -46,7 +46,7 @@ function FastenerModel({ url, onBBoxReady, expectedParams }) {
       center: center.toArray(),
     });
     // Auto-verify rendered geometry matches the dimension the user picked.
-    if (expectedParams) {
+    if (expectedParams && !hasResolvedAnnotations) {
       const longest = Math.max(...sizeArr);
       const expected =
         expectedParams.L !== undefined
@@ -65,7 +65,7 @@ function FastenerModel({ url, onBBoxReady, expectedParams }) {
         }
       }
     }
-  }, [gltf.scene, onBBoxReady, expectedParams]);
+  }, [gltf.scene, hasResolvedAnnotations, onBBoxReady, expectedParams]);
   return <primitive object={gltf.scene} />;
 }
 
@@ -426,12 +426,20 @@ const ViewerStage = React.memo(function ViewerStage({ modelUrl, viewerMessage, p
           <directionalLight position={[-12, 6, -10]} intensity={0.6} />
           <directionalLight position={[0, -10, 5]} intensity={0.3} />
           {modelUrl ? (
-            <Bounds fit clip observe margin={2.2}>
-              <Suspense fallback={null}>
-                <FastenerModel key={modelUrl} url={modelUrl} onBBoxReady={setBBox} expectedParams={params} />
-              </Suspense>
-                {(annotations?.length || (bbox && params)) ? <DimAnnotations bbox={bbox} params={params} annotations={annotations} /> : null}
-            </Bounds>
+            <>
+              <Bounds fit clip observe margin={2.2}>
+                <Suspense fallback={null}>
+                  <FastenerModel
+                    key={modelUrl}
+                    url={modelUrl}
+                    onBBoxReady={setBBox}
+                    expectedParams={params}
+                    hasResolvedAnnotations={Array.isArray(annotations) && annotations.length > 0}
+                  />
+                </Suspense>
+              </Bounds>
+              {(annotations?.length || (bbox && params)) ? <DimAnnotations bbox={bbox} params={params} annotations={annotations} /> : null}
+            </>
           ) : null}
           <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
         </Canvas>
