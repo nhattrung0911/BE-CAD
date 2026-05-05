@@ -143,8 +143,28 @@ function DimLeader({ point, label, leaderEnd, color = '#5b6573' }) {
   );
 }
 
-const DimAnnotations = React.memo(function DimAnnotations({ bbox, params }) {
+function fmtNumber(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  if (Number.isInteger(n)) return `${n}`;
+  return n.toFixed(2).replace(/\.?0+$/, '');
+}
+
+const DimAnnotations = React.memo(function DimAnnotations({ bbox, params, annotations }) {
   const dims = useMemo(() => {
+    if (Array.isArray(annotations) && annotations.length > 0) {
+      return {
+        measures: annotations.map((annotation) => ({
+          key: annotation.key,
+          a: annotation.from_point,
+          b: annotation.to_point,
+          offset: [0, 0, 0],
+          label: `${annotation.key} = ${fmtNumber(annotation.value_mm)}`,
+          color: annotation.color_hex,
+        })),
+        leaders: [],
+      };
+    }
     if (!bbox || !params) return { measures: [], leaders: [] };
     const { min, max, size } = bbox;
     // CadQuery templates extrude along +Z. Length params (L/m/h/k) are along Z;
@@ -163,24 +183,17 @@ const DimAnnotations = React.memo(function DimAnnotations({ bbox, params }) {
       : params.m !== undefined ? 'm'
       : params.h !== undefined ? 'h'
       : null;
-    const fmt = (v) => {
-      const n = Number(v);
-      if (!Number.isFinite(n)) return '';
-      if (Number.isInteger(n)) return `${n}`;
-      return n.toFixed(2).replace(/\.?0+$/, '');
-    };
-
-    // Length dim along Z, dim line offset to -X side
-    if (lenKey) {
+      // Length dim along Z, dim line offset to -X side
+      if (lenKey) {
       const a = [min[0], 0, min[2]];
       const b = [min[0], 0, max[2]];
       measures.push({
-        key: 'len',
-        a, b,
-        offset: [-off, 0, 0],
-        label: `${lenKey} = ${fmt(params[lenKey])}`,
-      });
-    }
+          key: 'len',
+          a, b,
+          offset: [-off, 0, 0],
+          label: `${lenKey} = ${fmtNumber(params[lenKey])}`,
+        });
+      }
 
     // Head height k (bolts) — along Z near the head
     if (params.k !== undefined && lenKey === 'L') {
@@ -188,24 +201,24 @@ const DimAnnotations = React.memo(function DimAnnotations({ bbox, params }) {
       const a = [min[0], 0, min[2]];
       const b = [min[0], 0, min[2] + k];
       measures.push({
-        key: 'k',
-        a, b,
-        offset: [-off * 0.45, 0, 0],
-        label: `k = ${fmt(k)}`,
-      });
-    }
+          key: 'k',
+          a, b,
+          offset: [-off * 0.45, 0, 0],
+          label: `k = ${fmtNumber(k)}`,
+        });
+      }
 
     // Across-flats s — measured on +Y face, dim line offset further +Y
     if (params.s !== undefined) {
       const a = [min[0], max[1], min[2]];
       const b = [max[0], max[1], min[2]];
       measures.push({
-        key: 's',
-        a, b,
-        offset: [0, off * 0.55, 0],
-        label: `s = ${fmt(params.s)}`,
-      });
-    }
+          key: 's',
+          a, b,
+          offset: [0, off * 0.55, 0],
+          label: `s = ${fmtNumber(params.s)}`,
+        });
+      }
 
     // Diameter — leader at mid-Z, points at cylinder body (+X side)
     const diaKey =
@@ -218,16 +231,16 @@ const DimAnnotations = React.memo(function DimAnnotations({ bbox, params }) {
       const cz = (min[2] + max[2]) / 2;
       const point = [dia / 2, 0, cz];
       const leaderEnd = [dia / 2 + off * 0.55, off * 0.4, cz];
-      leaders.push({
-        key: diaKey,
-        point,
-        leaderEnd,
-        label: `\u00d8${diaKey} = ${fmt(dia)}`,
-      });
-    }
+        leaders.push({
+          key: diaKey,
+          point,
+          leaderEnd,
+          label: `\u00d8${diaKey} = ${fmtNumber(dia)}`,
+        });
+      }
 
-    return { measures, leaders };
-  }, [bbox, params]);
+      return { measures, leaders };
+  }, [annotations, bbox, params]);
 
   return (
     <>
@@ -396,7 +409,7 @@ function DimensionPanel({ params, onParamChange, dirty, onApply, onReset, busy }
   );
 }
 
-const ViewerStage = React.memo(function ViewerStage({ modelUrl, viewerMessage, params }) {
+const ViewerStage = React.memo(function ViewerStage({ modelUrl, viewerMessage, params, annotations }) {
   const [bbox, setBBox] = useState(null);
   return (
     <div className="viewer-stage">
@@ -417,7 +430,7 @@ const ViewerStage = React.memo(function ViewerStage({ modelUrl, viewerMessage, p
               <Suspense fallback={null}>
                 <FastenerModel key={modelUrl} url={modelUrl} onBBoxReady={setBBox} expectedParams={params} />
               </Suspense>
-              {bbox && params ? <DimAnnotations bbox={bbox} params={params} /> : null}
+                {(annotations?.length || (bbox && params)) ? <DimAnnotations bbox={bbox} params={params} annotations={annotations} /> : null}
             </Bounds>
           ) : null}
           <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
@@ -1040,7 +1053,7 @@ function App() {
               </div>
             </div>
             <div className="viewer-wrap">
-              <ViewerStage modelUrl={modelUrl} viewerMessage={viewerMessage} params={paramDraft} />
+                <ViewerStage modelUrl={modelUrl} viewerMessage={viewerMessage} params={paramDraft} annotations={geometryResponse?.annotations || []} />
               {modelUrl ? (
                 <DimensionPanel
                   params={paramDraft}

@@ -21,3 +21,4 @@ def test_resolve_hex_bolt():
     body = r.json()
     assert body["status"] == "ready"
     assert body["artifact"]["url"].endswith("preview.glb")
+    assert [annotation["key"] for annotation in body["annotations"]] == ["d", "L", "k", "s", "b"]

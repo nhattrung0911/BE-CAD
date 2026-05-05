@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.model import ArtifactResponse
+from app.schemas.model import ArtifactResponse, DimensionAnnotationResponse
 
 
 GeometryLod = Literal["low", "medium", "high"]
@@ -24,6 +24,7 @@ class GeometryResponse(BaseModel):
     product_id: str
     params: dict[str, Any]
     artifact: ArtifactResponse | None = None
+    annotations: list[DimensionAnnotationResponse] = Field(default_factory=list)
     cache: Literal["hit", "miss"] = "miss"
     source: str | None = None
     job_id: str | None = None

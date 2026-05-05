@@ -8,6 +8,7 @@ from app.repositories.geometry_metrics import GeometryCacheMetricsRepository
 from app.schemas.geometry import GeometryGenerateRequest, GeometryLod, GeometryResponse
 from app.schemas.model import ModelResolveRequest
 from app.services.artifact_service import artifact_service
+from app.services.annotation_service import compute_annotations
 from app.services.hash_service import stable_params_hash
 from app.services.model_resolver import model_resolver
 from app.services.observability import record_cache_result, record_job_queued
@@ -25,8 +26,11 @@ def _resolve_geometry(
     lod: GeometryLod,
     variant_id: str | None = None,
 ) -> GeometryResponse:
+    annotations = []
     try:
         product_service.validate_params(product_id, params)
+        product = product_service.get_product(product_id)
+        annotations = compute_annotations(product.family, params)
     except KeyError:
         raise HTTPException(status_code=404, detail="Product not found")
     except ValueError as exc:
@@ -67,6 +71,7 @@ def _resolve_geometry(
         product_id=product_id,
         params=params,
         artifact=resolved.artifact,
+        annotations=annotations,
         cache=resolved.cache,
         source=resolved.source,
         job_id=resolved.job_id,
