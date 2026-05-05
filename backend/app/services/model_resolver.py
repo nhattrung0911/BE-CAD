@@ -38,7 +38,8 @@ class ModelResolver:
         with SessionLocal() as session:
             artifacts = ArtifactRepository(session)
             existing = artifacts.find_resolved_model(request.product_id, params_hash, request.format, request.quality)
-            if existing and artifact_service.exists(existing.storage_key):
+            artifact_backend_mismatch = existing is not None and self._artifact_backend_mismatch(existing)
+            if existing and artifact_service.exists(existing.storage_key) and not artifact_backend_mismatch:
                 artifact_response = self._artifact_response(
                     fmt=existing.format,
                     quality=existing.quality,
@@ -127,6 +128,7 @@ class ModelResolver:
                 data=generated.content,
                 source="generated_parametric",
                 metadata=generated.metadata,
+                overwrite_existing=artifact_backend_mismatch,
             )
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             record_inline_generation(elapsed_ms=elapsed_ms)
@@ -166,6 +168,13 @@ class ModelResolver:
 
     def _artifact_response(self, *, fmt: str, quality: str, url: str, sha256: str, file_size: int) -> ArtifactResponse:
         return ArtifactResponse(format=fmt, quality=quality, url=url, sha256=sha256, file_size=file_size)
+
+    def _artifact_backend_mismatch(self, artifact) -> bool:
+        if artifact.source != "generated_parametric":
+            return False
+        metadata = artifact.metadata_json or {}
+        generator = metadata.get("generator")
+        return bool(generator and generator != settings.cad_backend)
 
 
 model_resolver = ModelResolver()

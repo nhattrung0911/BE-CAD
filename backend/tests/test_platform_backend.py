@@ -1,4 +1,5 @@
 import io
+import hashlib
 
 from fastapi.testclient import TestClient
 
@@ -8,7 +9,7 @@ from app.db.models import Artifact
 from app.main import app
 from app.repositories.artifacts import ArtifactRepository
 from app.repositories.vendor_assets import VendorAssetRepository
-from app.services.artifact_service import ArtifactService
+from app.services.artifact_service import ArtifactService, artifact_service
 from app.services.cache_service import cache
 from app.services.jobs import QUEUE_BATCH_PREGENERATE, QUEUE_PREVIEW_FAST, enqueue_generation_job
 
@@ -136,6 +137,78 @@ def test_engineering_generation_is_queued_when_no_cached_or_vendor_asset():
     assert body["status"] == "queued"
     assert body["source"] == "queued_parametric"
     assert body["job_id"].startswith("job_")
+
+
+def test_resolver_regenerates_stale_mock_artifact_when_backend_is_cadquery(monkeypatch):
+    from app.cad.template_base import GeneratedModel
+    from app.services.hash_service import stable_params_hash
+    from app.services.job_runner import model_artifact_key
+
+    params = {"d": 12, "s": 17, "m": 10, "lod": "medium"}
+    params_hash = stable_params_hash(
+        "hex-nut-iso4033",
+        settings.template_version,
+        "preview",
+        "glb",
+        params,
+    )
+    storage_key = model_artifact_key("hex-nut-iso4033", params_hash, "preview", "glb")
+    stale_payload = b'{\n  "format": "glb",\n  "generator": "mock"\n}'
+
+    stored = artifact_service.put_bytes(storage_key, stale_payload, content_type="model/gltf-binary")
+    with SessionLocal() as session:
+        ArtifactRepository(session).create(
+            product_id="hex-nut-iso4033",
+            artifact_type="model",
+            format="glb",
+            quality="preview",
+            storage_key=stored["storage_key"],
+            sha256=stored["sha256"],
+            file_size=stored["file_size"],
+            source="generated_parametric",
+            params_hash=params_hash,
+            metadata={"generator": "mock", "template": "hex_nut"},
+        )
+        session.commit()
+
+    class FakeCadQueryBackend:
+        def generate(self, product_id, generated_params, fmt, quality):
+            assert product_id == "hex-nut-iso4033"
+            assert generated_params == params
+            assert fmt == "glb"
+            assert quality == "preview"
+            return GeneratedModel(
+                content=b"glTF\x02\x00\x00\x00real-binary-gltf",
+                format="glb",
+                metadata={"generator": "cadquery", "template": "hex_nut", "exporter": "cadquery_assembly_glb"},
+            )
+
+    original_backend = settings.cad_backend
+    settings.cad_backend = "cadquery"
+    monkeypatch.setattr("app.services.model_resolver.get_cad_backend", lambda name: FakeCadQueryBackend())
+    monkeypatch.setattr("app.services.job_runner.get_cad_backend", lambda name: FakeCadQueryBackend())
+
+    try:
+        response = client.post(
+            "/api/v1/models/resolve",
+            json={
+                "product_id": "hex-nut-iso4033",
+                "params": params,
+                "format": "glb",
+                "quality": "preview",
+            },
+        )
+    finally:
+        settings.cad_backend = original_backend
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["source"] == "generated_parametric"
+
+    artifact_bytes = artifact_service.read_bytes(storage_key)
+    assert artifact_bytes.startswith(b"glTF")
+    assert hashlib.sha256(artifact_bytes).hexdigest() == body["artifact"]["sha256"]
 
 
 def test_enqueue_generation_job_uses_named_queues():

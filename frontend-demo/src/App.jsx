@@ -553,11 +553,25 @@ function App() {
     return '';
   }, [busy, errorText, geometryResponse]);
 
+  const backendModeWarning = useMemo(() => {
+    if (health?.cad_backend !== 'mock') return '';
+    return 'Backend is running in mock CAD mode. Restart with CAD_BACKEND=cadquery for real GLB preview rendering.';
+  }, [health]);
+
   useEffect(() => () => {
     if (pollTimerRef.current) {
       clearTimeout(pollTimerRef.current);
     }
   }, []);
+
+  function ensureRenderableBackend() {
+    if (health?.cad_backend !== 'mock') return true;
+    const message = 'Preview rendering is disabled while backend CAD mode is mock. Restart backend with CAD_BACKEND=cadquery.';
+    setErrorText(message);
+    setStatusText('Backend connected, mock CAD mode');
+    setActiveTab('platform');
+    return false;
+  }
 
   async function fetchJson(path, init) {
     const response = await fetch(`${apiBase}${path}`, init);
@@ -780,6 +794,7 @@ function App() {
 
   async function runVariantFlow() {
     if (!selectedVariantId) return;
+    if (!ensureRenderableBackend()) return;
     stopPolling();
     setBusy(true);
     setErrorText('');
@@ -815,6 +830,7 @@ function App() {
 
   async function runGenerateFlow() {
     if (!selectedProductId) return;
+    if (!ensureRenderableBackend()) return;
     stopPolling();
     setBusy(true);
     setErrorText('');
@@ -893,6 +909,7 @@ function App() {
             Refresh
           </button>
         </div>
+        {backendModeWarning ? <p className="warning-banner">{backendModeWarning}</p> : null}
       </section>
 
       <section className="split-layout">

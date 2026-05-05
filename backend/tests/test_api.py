@@ -1,7 +1,15 @@
 from fastapi.testclient import TestClient
+from app.core.database import Base, engine
 from app.main import app
+from app.services.cache_service import cache
 
 client = TestClient(app)
+
+
+def setup_function():
+    cache.clear()
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 
 def test_health():

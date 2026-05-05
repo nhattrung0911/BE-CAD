@@ -24,12 +24,13 @@ class ArtifactService:
         data: bytes,
         source: str,
         metadata: dict | None = None,
+        overwrite_existing: bool = False,
     ) -> dict:
         with SessionLocal() as session:
             repo = ArtifactRepository(session)
             existing = repo.find_resolved_model(product_id, params_hash, fmt, quality)
             if existing:
-                if self.exists(existing.storage_key):
+                if self.exists(existing.storage_key) and not overwrite_existing:
                     session.commit()
                     return {
                         "storage_key": existing.storage_key,
@@ -39,7 +40,8 @@ class ArtifactService:
                         "artifact_id": existing.id,
                     }
 
-                stored = self.put_bytes(existing.storage_key, data)
+                target_key = existing.storage_key if overwrite_existing else existing.storage_key
+                stored = self.put_bytes(target_key, data)
                 repo.update_blob_metadata(
                     existing,
                     storage_key=stored["storage_key"],

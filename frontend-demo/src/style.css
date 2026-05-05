@@ -116,6 +116,17 @@ a {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
+.warning-banner {
+  background: #fff4db;
+  border: 1px solid #efcf8d;
+  border-radius: 8px;
+  color: #8b5a00;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  padding: 10px 12px;
+}
+
 .split-layout {
   display: grid;
   gap: 16px;
