@@ -116,6 +116,10 @@ class RedisCache:
     def clear(self) -> None:
         if self.client is None:
             return self.fallback.clear()
+        keys = list(self.client.scan_iter("model:*"))
+        if keys:
+            self.client.delete(*keys)
+        self.fallback.clear()
 
     def is_connected(self) -> bool:
         if self.client is None:

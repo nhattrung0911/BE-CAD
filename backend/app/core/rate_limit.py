@@ -41,16 +41,16 @@ class _MemoryLimiter:
 _memory_limiter = _MemoryLimiter()
 
 
-def _redis_client():
-    if not settings.redis_url:
-        return None
+_rate_limit_redis = None
+if settings.redis_url:
     try:
         import redis  # type: ignore
-
-        return redis.Redis.from_url(settings.redis_url, socket_timeout=0.5)
+        _rate_limit_redis = redis.Redis.from_url(settings.redis_url, socket_timeout=0.5)
     except Exception as exc:
-        logger.warning("rate-limit redis unavailable: %s", exc)
-        return None
+        logger.warning("rate-limit redis init failed: %s", exc)
+
+def _redis_client():
+    return _rate_limit_redis
 
 
 def _redis_hit(client, key: str, limit: int, window_seconds: float) -> bool:

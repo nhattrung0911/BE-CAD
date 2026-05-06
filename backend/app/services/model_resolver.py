@@ -1,3 +1,4 @@
+import logging
 import time
 
 from app.core.config import settings
@@ -12,6 +13,8 @@ from app.services.jobs import enqueue_generation_job, queue_for_request
 from app.services.observability import record_inline_generation
 from app.services.job_runner import model_artifact_key
 from app.schemas.model import ModelResolveRequest, ModelResolveResponse, ArtifactResponse
+
+logger = logging.getLogger(__name__)
 
 
 class ModelResolver:
@@ -155,6 +158,7 @@ class ModelResolver:
 
             if isinstance(exc, AsyncDispatchUnavailable):
                 raise
+            logger.exception("Inline CAD generation failed for product=%s", request.product_id)
             return ModelResolveResponse(status="failed", message=str(exc), cache="miss")
         finally:
             cache.release_lock(lock)

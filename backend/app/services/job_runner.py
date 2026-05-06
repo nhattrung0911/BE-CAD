@@ -1,3 +1,4 @@
+import logging
 from app.cad.backends import get_cad_backend
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -6,6 +7,8 @@ from app.repositories.jobs import JobRepository
 from app.services.artifact_service import artifact_service
 from app.services.cache_service import cache
 from app.services.observability import record_job_completed, record_job_failed
+
+logger = logging.getLogger(__name__)
 
 
 def model_artifact_key(product_id: str, params_hash: str, quality: str, fmt: str) -> str:
@@ -78,6 +81,7 @@ def run_model_generation_job(job_id: str) -> dict:
         record_job_completed()
         return {"job_id": job_id, "status": "done", "artifact_id": artifact_id}
     except Exception as exc:
+        logger.exception("Async CAD generation job failed for job_id=%s product=%s", job_id, job.product_id)
         with SessionLocal() as session:
             jobs = JobRepository(session)
             current = jobs.find_by_job_id(job_id)

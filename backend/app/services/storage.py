@@ -82,10 +82,16 @@ class S3Storage(ObjectStorage):
 
     def exists(self, key: str) -> bool:
         try:
+            import botocore.exceptions
+
             self.client.head_object(Bucket=self.bucket, Key=key)
             return True
-        except Exception:
-            return False
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "404":
+                return False
+            import logging
+            logging.getLogger(__name__).warning("S3 head_object failed for key=%s: %s", key, exc)
+            raise
 
     def read_bytes(self, key: str) -> bytes:
         obj = self.client.get_object(Bucket=self.bucket, Key=key)

@@ -28,3 +28,5 @@ frontend-demo/.vite/
 *.sqlite
 *.sqlite3
 .gitnexus
+backend/pytest_tmp_root/
+

@@ -1,4 +1,7 @@
+import logging
 from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -25,7 +28,8 @@ def _check_database() -> str:
         with SessionLocal() as session:
             session.execute(text("SELECT 1"))
         return "ok"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Database readiness check failed: %s", exc)
         return "error"
 
 
@@ -34,7 +38,8 @@ def _check_storage(factory) -> str:
         storage = factory()
         storage.exists("__readiness_probe__")
         return "ok"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Storage readiness check failed: %s", exc)
         return "error"
 
 

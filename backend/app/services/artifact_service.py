@@ -40,7 +40,7 @@ class ArtifactService:
                         "artifact_id": existing.id,
                     }
 
-                target_key = existing.storage_key if overwrite_existing else existing.storage_key
+                target_key = existing.storage_key
                 stored = self.put_bytes(target_key, data)
                 repo.update_blob_metadata(
                     existing,
