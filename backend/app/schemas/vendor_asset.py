@@ -20,3 +20,5 @@ class VendorAssetResponse(BaseModel):
     file_size: int
     license_status: LicenseStatus
     validation_status: ValidationStatus
+    uploaded_by_user_id: int | None = None
+    reviewed_by_user_id: int | None = None

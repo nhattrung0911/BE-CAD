@@ -21,6 +21,7 @@ class VendorAssetRepository:
         validation_status: str,
         variant_id: str | None = None,
         metadata: dict | None = None,
+        uploaded_by_user_id: int | None = None,
     ) -> VendorAsset:
         asset = VendorAsset(
             product_id=product_id,
@@ -33,6 +34,7 @@ class VendorAssetRepository:
             license_status=license_status,
             validation_status=validation_status,
             metadata_json=metadata,
+            uploaded_by_user_id=uploaded_by_user_id,
         )
         self.session.add(asset)
         self.session.flush()
@@ -53,16 +55,28 @@ class VendorAssetRepository:
         *,
         license_status: str | None = None,
         validation_status: str | None = None,
+        reviewed_by_user_id: int | None = None,
     ) -> VendorAsset:
         if license_status is not None:
             asset.license_status = license_status
         if validation_status is not None:
             asset.validation_status = validation_status
+        if reviewed_by_user_id is not None:
+            asset.reviewed_by_user_id = reviewed_by_user_id
         self.session.flush()
         return asset
 
+    def find_by_storage_key(self, storage_key: str) -> VendorAsset | None:
+        from sqlalchemy import select as _select
+        return self.session.scalar(_select(VendorAsset).where(VendorAsset.storage_key == storage_key))
+
     def find_for_variant(self, variant_id: str, fmt: str) -> VendorAsset | None:
-        """Variant-specific override (highest priority in resolver)."""
+        """Variant-specific override (highest priority in resolver).
+
+        Only files that have been explicitly approved AND validated by an admin
+        are eligible — `pending` files are uploader-staged and must not be
+        served to public traffic until reviewed.
+        """
         if not variant_id:
             return None
         return self.session.scalar(
@@ -71,15 +85,16 @@ class VendorAssetRepository:
                 VendorAsset.variant_id == variant_id,
                 VendorAsset.format == fmt,
                 VendorAsset.license_status == "approved",
-                VendorAsset.validation_status.in_(["valid", "pending"]),
+                VendorAsset.validation_status == "valid",
             )
-            .order_by(VendorAsset.validation_status.desc(), VendorAsset.created_at.desc())
+            .order_by(VendorAsset.created_at.desc())
         )
 
     def find_exact(self, product_id: str, fmt: str) -> VendorAsset | None:
         """Product-level fallback. Prefers rows that are NOT bound to a specific
         variant (variant_id IS NULL) so a generic product file doesn't accidentally
-        override unrelated variants."""
+        override unrelated variants. Same approve-and-validate gating as
+        ``find_for_variant``."""
         return self.session.scalar(
             select(VendorAsset)
             .where(
@@ -87,7 +102,7 @@ class VendorAssetRepository:
                 VendorAsset.variant_id.is_(None),
                 VendorAsset.format == fmt,
                 VendorAsset.license_status == "approved",
-                VendorAsset.validation_status.in_(["valid", "pending"]),
+                VendorAsset.validation_status == "valid",
             )
-            .order_by(VendorAsset.validation_status.desc(), VendorAsset.created_at.desc())
+            .order_by(VendorAsset.created_at.desc())
         )

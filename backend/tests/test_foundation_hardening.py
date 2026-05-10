@@ -140,6 +140,8 @@ def test_production_settings_reject_mock_backend():
             auto_create_schema=False,
             require_redis_for_ready=True,
             admin_api_key="x" * 32,
+            jwt_secret="y" * 32,
+            allow_first_admin_bootstrap=False,
         )
     except ValueError as exc:
         assert "CAD_BACKEND=mock" in str(exc)
@@ -156,6 +158,8 @@ def test_production_settings_reject_auto_create_schema():
             auto_create_schema=True,
             require_redis_for_ready=True,
             admin_api_key="x" * 32,
+            jwt_secret="y" * 32,
+            allow_first_admin_bootstrap=False,
         )
     except ValueError as exc:
         assert "AUTO_CREATE_SCHEMA=true" in str(exc)
@@ -188,6 +192,8 @@ def test_production_settings_require_admin_api_key():
             auto_create_schema=False,
             require_redis_for_ready=True,
             admin_api_key=None,
+            jwt_secret="y" * 32,
+            allow_first_admin_bootstrap=False,
         )
     assert "ADMIN_API_KEY" in str(exc.value)
 
@@ -201,8 +207,55 @@ def test_production_settings_require_async_generation_disabled():
             auto_create_schema=False,
             require_redis_for_ready=True,
             admin_api_key="x" * 32,
+            jwt_secret="y" * 32,
+            allow_first_admin_bootstrap=False,
         )
     assert "MODEL_SYNC_GENERATION=false" in str(exc.value)
+
+
+def test_production_settings_require_jwt_secret():
+    with pytest.raises(ValueError) as exc:
+        Settings(
+            environment="production",
+            cad_backend="cadquery",
+            model_sync_generation=False,
+            auto_create_schema=False,
+            require_redis_for_ready=True,
+            admin_api_key="x" * 32,
+            jwt_secret=None,
+            allow_first_admin_bootstrap=False,
+        )
+    assert "JWT_SECRET" in str(exc.value)
+
+
+def test_production_settings_reject_short_jwt_secret():
+    with pytest.raises(ValueError) as exc:
+        Settings(
+            environment="production",
+            cad_backend="cadquery",
+            model_sync_generation=False,
+            auto_create_schema=False,
+            require_redis_for_ready=True,
+            admin_api_key="x" * 32,
+            jwt_secret="too-short",
+            allow_first_admin_bootstrap=False,
+        )
+    assert "JWT_SECRET" in str(exc.value)
+
+
+def test_production_settings_reject_first_admin_bootstrap():
+    with pytest.raises(ValueError) as exc:
+        Settings(
+            environment="production",
+            cad_backend="cadquery",
+            model_sync_generation=False,
+            auto_create_schema=False,
+            require_redis_for_ready=True,
+            admin_api_key="x" * 32,
+            jwt_secret="y" * 32,
+            allow_first_admin_bootstrap=True,
+        )
+    assert "ALLOW_FIRST_ADMIN_BOOTSTRAP" in str(exc.value)
 
 
 def test_metrics_reflect_real_request_count():

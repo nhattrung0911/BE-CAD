@@ -8,12 +8,14 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.database import init_db, should_auto_create_schema
+from app.api.routes_auth import router as auth_router
 from app.api.routes_geometry import router as geometry_router
 from app.api.routes_ingestion import router as ingestion_router
 from app.api.routes_model_jobs import router as model_jobs_router
 from app.api.routes_metrics import router as metrics_router
 from app.api.routes_products import router as products_router
 from app.api.routes_models import router as models_router
+from app.api.routes_raw_assets import router as raw_assets_router
 from app.api.routes_vendor_assets import router as vendor_assets_router
 from app.services.health_service import readiness_payload
 from app.services.observability import record_request, reset_metrics
@@ -27,23 +29,28 @@ app.state.metrics = reset_metrics()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=[settings.request_id_header],
 )
 
 if should_auto_create_schema():
     init_db()
 settings.artifact_base_dir.mkdir(parents=True, exist_ok=True)
 settings.raw_asset_base_dir.mkdir(parents=True, exist_ok=True)
+# Generated artifacts are public-by-design (we sign their content addresses with
+# stable hashes), so mount as static. Raw vendor assets are license-gated and
+# served via the dedicated router (raw_assets_router) — never as bare static files.
 app.mount(settings.public_artifact_prefix, StaticFiles(directory=str(settings.artifact_base_dir)), name="artifacts")
-app.mount(settings.public_raw_asset_prefix, StaticFiles(directory=str(settings.raw_asset_base_dir)), name="raw-assets")
 
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(products_router, prefix="/api/v1")
 app.include_router(models_router, prefix="/api/v1")
 app.include_router(geometry_router, prefix="/api/v1")
 app.include_router(model_jobs_router, prefix="/api/v1")
 app.include_router(vendor_assets_router, prefix="/api/v1")
 app.include_router(ingestion_router, prefix="/api/v1")
+app.include_router(raw_assets_router)
 app.include_router(metrics_router)
 
 

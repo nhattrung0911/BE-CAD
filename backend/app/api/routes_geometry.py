@@ -1,6 +1,13 @@
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.core.config import settings
+from app.core.rate_limit import rate_limit
+
+_public_geometry_limit = rate_limit(
+    name="public_geometry",
+    limit=settings.public_geometry_rate_limit,
+    window_seconds=float(settings.public_geometry_rate_window_seconds),
+)
 from app.core.database import SessionLocal
 from app.domain.geometry_hashes import params_for_lod
 from app.repositories.artifacts import ArtifactRepository
@@ -80,12 +87,21 @@ def _resolve_geometry(
 
 
 @router.post("/generate", response_model=GeometryResponse)
-def generate_geometry(request: GeometryGenerateRequest, http_request: Request):
+def generate_geometry(
+    request: GeometryGenerateRequest,
+    http_request: Request,
+    _: None = Depends(_public_geometry_limit),
+):
     return _resolve_geometry(http_request=http_request, product_id=request.product_id, params=request.params, lod=request.lod)
 
 
 @router.get("/variant/{variant_id}", response_model=GeometryResponse)
-def geometry_for_variant(variant_id: str, http_request: Request, lod: GeometryLod = "medium"):
+def geometry_for_variant(
+    variant_id: str,
+    http_request: Request,
+    lod: GeometryLod = "medium",
+    _: None = Depends(_public_geometry_limit),
+):
     try:
         variant = product_service.get_variant(variant_id)
     except KeyError:

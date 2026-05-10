@@ -1,13 +1,21 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.auth import (
+    ROLE_ADMIN,
+    ROLE_UPLOADER,
+    ROLE_VIEWER,
+    AuthPrincipal,
+    client_ip,
+    require_role,
+)
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import rate_limit
-from app.core.security import require_admin_api_key
 from app.repositories.vendor_assets import VendorAssetRepository
 from app.schemas.vendor_asset import VendorAssetResponse
+from app.services.audit_service import record_audit
 from app.services.cache_service import cache
 from app.services.storage import make_raw_asset_storage, safe_storage_segment
 
@@ -21,8 +29,27 @@ SUPPORTED_LICENSE_STATUSES = {"pending", "approved", "restricted", "rejected"}
 SUPPORTED_VALIDATION_STATUSES = {"pending", "valid", "invalid"}
 
 
+def _to_response(asset, url: str) -> VendorAssetResponse:
+    return VendorAssetResponse(
+        id=asset.id,
+        product_id=asset.product_id,
+        variant_id=asset.variant_id,
+        format=asset.format,
+        filename=asset.filename,
+        storage_key=asset.storage_key,
+        url=url,
+        sha256=asset.sha256,
+        file_size=asset.file_size,
+        license_status=asset.license_status,
+        validation_status=asset.validation_status,
+        uploaded_by_user_id=asset.uploaded_by_user_id,
+        reviewed_by_user_id=asset.reviewed_by_user_id,
+    )
+
+
 @router.post("", response_model=VendorAssetResponse, status_code=status.HTTP_201_CREATED)
 async def upload_vendor_asset(
+    request: Request,
     product_id: str = Form(...),
     format: str = Form(...),
     license_status: str = Form("pending"),
@@ -30,7 +57,7 @@ async def upload_vendor_asset(
     variant_id: str | None = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
+    principal: AuthPrincipal = Depends(require_role(ROLE_UPLOADER)),
     __: None = Depends(_vendor_upload_limit),
 ):
     data = await file.read()
@@ -39,13 +66,16 @@ async def upload_vendor_asset(
         raise HTTPException(status_code=400, detail=validation_errors)
     if len(data) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="Uploaded asset exceeds MAX_UPLOAD_BYTES")
+    # Non-admin uploaders cannot self-approve their own files. Force pending.
+    # Admin reviewers must explicitly PATCH /status to approve and validate.
+    if principal.role != ROLE_ADMIN:
+        license_status = "pending"
+        validation_status = "pending"
     storage = make_raw_asset_storage()
     try:
         safe_product_id = safe_storage_segment(product_id)
         safe_format = safe_storage_segment(format)
         filename = safe_storage_segment(file.filename or f"asset.{format}")
-        # Variant scoping in the storage path keeps per-variant uploads isolated
-        # so a future re-upload doesn't collide with a different variant's file.
         if variant_id:
             safe_variant_id = safe_storage_segment(variant_id)
             key = f"{safe_product_id}/{safe_format}/{safe_variant_id}/{filename}"
@@ -64,21 +94,25 @@ async def upload_vendor_asset(
         file_size=stored["file_size"],
         license_status=license_status,
         validation_status=validation_status,
+        uploaded_by_user_id=principal.user_id,
+    )
+    record_audit(
+        db,
+        action="vendor_asset.upload",
+        user_id=principal.user_id,
+        target_type="vendor_asset",
+        target_id=asset.id,
+        detail={
+            "product_id": product_id,
+            "variant_id": variant_id,
+            "format": format,
+            "file_size": stored["file_size"],
+            "machine": principal.is_machine,
+        },
+        ip_address=client_ip(request),
     )
     db.commit()
-    return VendorAssetResponse(
-        id=asset.id,
-        product_id=asset.product_id,
-        variant_id=asset.variant_id,
-        format=asset.format,
-        filename=asset.filename,
-        storage_key=asset.storage_key,
-        url=stored["url"],
-        sha256=asset.sha256,
-        file_size=asset.file_size,
-        license_status=asset.license_status,
-        validation_status=asset.validation_status,
-    )
+    return _to_response(asset, stored["url"])
 
 
 class VendorAssetStatusUpdate(BaseModel):
@@ -90,35 +124,21 @@ class VendorAssetStatusUpdate(BaseModel):
 def list_vendor_assets(
     product_id: str | None = None,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
+    _: AuthPrincipal = Depends(require_role(ROLE_VIEWER, ROLE_UPLOADER)),
     __: None = Depends(_vendor_admin_limit),
 ):
     repo = VendorAssetRepository(db)
     rows = repo.list_by_product(product_id)
-    return [
-        VendorAssetResponse(
-            id=a.id,
-            product_id=a.product_id,
-            variant_id=a.variant_id,
-            format=a.format,
-            filename=a.filename,
-            storage_key=a.storage_key,
-            url=f"{settings.public_raw_asset_prefix}/{a.storage_key}",
-            sha256=a.sha256,
-            file_size=a.file_size,
-            license_status=a.license_status,
-            validation_status=a.validation_status,
-        )
-        for a in rows
-    ]
+    return [_to_response(a, f"{settings.public_raw_asset_prefix}/{a.storage_key}") for a in rows]
 
 
 @router.patch("/{asset_id}/status", response_model=VendorAssetResponse)
 def update_vendor_asset_status(
     asset_id: int,
     payload: VendorAssetStatusUpdate,
+    request: Request,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
+    principal: AuthPrincipal = Depends(require_role(ROLE_ADMIN)),
     __: None = Depends(_vendor_admin_limit),
 ):
     if payload.license_status is None and payload.validation_status is None:
@@ -136,24 +156,25 @@ def update_vendor_asset_status(
         asset,
         license_status=payload.license_status,
         validation_status=payload.validation_status,
+        reviewed_by_user_id=principal.user_id,
+    )
+    record_audit(
+        db,
+        action="vendor_asset.review",
+        user_id=principal.user_id,
+        target_type="vendor_asset",
+        target_id=asset.id,
+        detail={
+            "license_status": payload.license_status,
+            "validation_status": payload.validation_status,
+        },
+        ip_address=client_ip(request),
     )
     db.commit()
     # Invalidate any cached resolver entries for this product/format so the
     # next request re-runs the resolver and picks up the new status.
     cache.clear()
-    return VendorAssetResponse(
-        id=asset.id,
-        product_id=asset.product_id,
-        variant_id=asset.variant_id,
-        format=asset.format,
-        filename=asset.filename,
-        storage_key=asset.storage_key,
-        url=f"{settings.public_raw_asset_prefix}/{asset.storage_key}",
-        sha256=asset.sha256,
-        file_size=asset.file_size,
-        license_status=asset.license_status,
-        validation_status=asset.validation_status,
-    )
+    return _to_response(asset, f"{settings.public_raw_asset_prefix}/{asset.storage_key}")
 
 
 def _validate_vendor_asset_fields(format: str, license_status: str, validation_status: str) -> dict[str, str]:

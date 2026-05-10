@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     require_redis_for_ready: bool = False
     max_upload_bytes: int = 100 * 1024 * 1024
     model_cache_ttl_seconds: int = 86400
+    jwt_secret: str | None = None
+    jwt_ttl_minutes: int = 60
+    public_geometry_rate_limit: int = 60
+    public_geometry_rate_window_seconds: int = 3600
+    allow_first_admin_bootstrap: bool = True
 
     @property
     def cors_origins(self) -> list[str]:
@@ -52,6 +57,15 @@ class Settings(BaseSettings):
                 raise ValueError("ADMIN_API_KEY must be set in production.")
             if len(self.admin_api_key) < 32:
                 raise ValueError("ADMIN_API_KEY must be at least 32 characters in production.")
+            if not self.jwt_secret:
+                raise ValueError("JWT_SECRET must be set in production.")
+            if len(self.jwt_secret) < 32:
+                raise ValueError("JWT_SECRET must be at least 32 characters in production.")
+            if self.allow_first_admin_bootstrap:
+                raise ValueError(
+                    "ALLOW_FIRST_ADMIN_BOOTSTRAP must be false in production. "
+                    "Seed the first admin via `python -m app.bootstrap.create_admin` before deploy."
+                )
             for origin in self.cors_origins:
                 if origin == "*" or origin == "null":
                     raise ValueError(

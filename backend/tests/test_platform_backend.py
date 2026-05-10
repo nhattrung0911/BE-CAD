@@ -55,7 +55,7 @@ def test_vendor_asset_registration_stores_checksum_and_license_state():
             "product_id": "hex-bolt-iso4014",
             "format": "step",
             "license_status": "approved",
-            "validation_status": "pending",
+            "validation_status": "valid",
         },
         files={"file": ("bolt.step", io.BytesIO(payload), "application/step")},
     )
@@ -65,10 +65,13 @@ def test_vendor_asset_registration_stores_checksum_and_license_state():
     assert body["product_id"] == "hex-bolt-iso4014"
     assert body["format"] == "step"
     assert body["license_status"] == "approved"
-    assert body["validation_status"] == "pending"
+    assert body["validation_status"] == "valid"
     assert body["sha256"]
     assert body["storage_key"].endswith("/bolt.step")
 
+    # Resolver gating requires both approved license AND valid (admin-reviewed)
+    # validation. The repository helpers used by the resolver enforce that
+    # contract, so unreviewed (pending) files are intentionally invisible.
     with SessionLocal() as session:
         found = VendorAssetRepository(session).find_exact(
             product_id="hex-bolt-iso4014",

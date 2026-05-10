@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from app.core.config import settings
+from app.core.rate_limit import rate_limit
 from app.schemas.model import ModelResolveRequest, ModelResolveResponse
 from app.services.annotation_service import compute_annotations
 from app.services.model_resolver import model_resolver
@@ -8,9 +10,19 @@ from app.workers.tasks import AsyncDispatchUnavailable
 
 router = APIRouter(prefix="/models", tags=["models"])
 
+_public_model_limit = rate_limit(
+    name="public_model_resolve",
+    limit=settings.public_geometry_rate_limit,
+    window_seconds=float(settings.public_geometry_rate_window_seconds),
+)
+
 
 @router.post("/resolve", response_model=ModelResolveResponse)
-def resolve_model(request: ModelResolveRequest, http_request: Request):
+def resolve_model(
+    request: ModelResolveRequest,
+    http_request: Request,
+    _: None = Depends(_public_model_limit),
+):
     annotations = []
     try:
         product_service.validate_params(request.product_id, request.params)

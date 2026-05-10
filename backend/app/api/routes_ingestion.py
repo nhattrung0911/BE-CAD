@@ -1,17 +1,18 @@
 import re
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.core.auth import ROLE_UPLOADER, AuthPrincipal, client_ip, require_role
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import rate_limit
-from app.core.security import require_admin_api_key
 
 _ingest_rate_limit = rate_limit(name="ingest_2d", limit=30, window_seconds=60.0)
 from app.ingestion.svg_parser import parse_spec_table_text, parse_svg_dimension_labels
 from app.repositories.parsed_drawings import ParsedDrawingRepository
 from app.schemas.ingestion import DrawingIngestRequest, DrawingIngestResponse
+from app.services.audit_service import record_audit
 from app.services.hash_service import sha256_bytes
 
 router = APIRouter(prefix="/ingest", tags=["ingestion"])
@@ -20,7 +21,14 @@ _PRODUCT_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 SUPPORTED_DRAWING_EXTS = {"svg", "txt"}
 
 
-def _persist_drawing(db: Session, product_id: str, content: str) -> DrawingIngestResponse:
+def _persist_drawing(
+    db: Session,
+    product_id: str,
+    content: str,
+    *,
+    principal: AuthPrincipal,
+    request: Request,
+) -> DrawingIngestResponse:
     dimensions = parse_svg_dimension_labels(content)
     metadata = parse_spec_table_text(content)
     raw_sha = sha256_bytes(content.encode("utf-8"))
@@ -30,6 +38,15 @@ def _persist_drawing(db: Session, product_id: str, content: str) -> DrawingInges
         metadata=metadata,
         raw_sha256=raw_sha,
     )
+    record_audit(
+        db,
+        action="ingest.drawing",
+        user_id=principal.user_id,
+        target_type="parsed_drawing",
+        target_id=product_id,
+        detail={"raw_sha256": raw_sha, "machine": principal.is_machine},
+        ip_address=client_ip(request),
+    )
     db.commit()
     return DrawingIngestResponse(
         product_id=product_id, dimensions=dimensions, metadata=metadata, raw_sha256=raw_sha
@@ -38,12 +55,13 @@ def _persist_drawing(db: Session, product_id: str, content: str) -> DrawingInges
 
 @router.post("/2d", response_model=DrawingIngestResponse)
 def ingest_2d(
-    request: DrawingIngestRequest,
+    payload: DrawingIngestRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
+    principal: AuthPrincipal = Depends(require_role(ROLE_UPLOADER)),
     __: None = Depends(_ingest_rate_limit),
 ):
-    return _persist_drawing(db, request.product_id, request.content)
+    return _persist_drawing(db, payload.product_id, payload.content, principal=principal, request=request)
 
 
 @router.post(
@@ -52,10 +70,11 @@ def ingest_2d(
     status_code=status.HTTP_201_CREATED,
 )
 async def ingest_2d_upload(
+    request: Request,
     product_id: str = Form(..., min_length=1, max_length=128),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_api_key),
+    principal: AuthPrincipal = Depends(require_role(ROLE_UPLOADER)),
     __: None = Depends(_ingest_rate_limit),
 ):
     """Multipart variant for non-technical operators: drag/drop SVG or text drawing."""
@@ -81,4 +100,4 @@ async def ingest_2d_upload(
             status_code=413,
             detail="Drawing content exceeds MAX_DRAWING_CONTENT_CHARS",
         )
-    return _persist_drawing(db, product_id, content)
+    return _persist_drawing(db, product_id, content, principal=principal, request=request)
