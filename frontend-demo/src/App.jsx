@@ -150,9 +150,37 @@ function fmtNumber(v) {
   return n.toFixed(2).replace(/\.?0+$/, '');
 }
 
+// Small XYZ tripod at the world origin so the user can see exactly where the
+// part is anchored. All BE-emitted dimensions are relative to this origin.
+function OriginAxes({ bbox }) {
+  const span = bbox ? Math.max(bbox.size[0], bbox.size[1], bbox.size[2]) : 10;
+  const len = Math.max(span * 0.55, 4);
+  const width = 1.5;
+  return (
+    <group>
+      <Line points={[[0, 0, 0], [len, 0, 0]]} color="#d33" lineWidth={width} />
+      <Line points={[[0, 0, 0], [0, len, 0]]} color="#3a3" lineWidth={width} />
+      <Line points={[[0, 0, 0], [0, 0, len]]} color="#36c" lineWidth={width} />
+      <Html position={[len * 1.05, 0, 0]} center style={{ pointerEvents: 'none' }}>
+        <div className="axis-label-cad axis-x">X</div>
+      </Html>
+      <Html position={[0, len * 1.05, 0]} center style={{ pointerEvents: 'none' }}>
+        <div className="axis-label-cad axis-y">Y</div>
+      </Html>
+      <Html position={[0, 0, len * 1.05]} center style={{ pointerEvents: 'none' }}>
+        <div className="axis-label-cad axis-z">Z</div>
+      </Html>
+    </group>
+  );
+}
+
 const DimAnnotations = React.memo(function DimAnnotations({ bbox, params, annotations }) {
   const dims = useMemo(() => {
     if (Array.isArray(annotations) && annotations.length > 0) {
+      // BE now emits from_point/to_point already at the final dimension-line
+      // location (anchored at origin axes, not on a face). offset=0 keeps the
+      // line where the BE asked for it instead of doubling the offset client-
+      // side.
       return {
         measures: annotations.map((annotation) => ({
           key: annotation.key,
@@ -437,8 +465,14 @@ const ViewerStage = React.memo(function ViewerStage({ modelUrl, viewerMessage, p
                     hasResolvedAnnotations={Array.isArray(annotations) && annotations.length > 0}
                   />
                 </Suspense>
+                {/* Annotations live inside Bounds so the camera fits both the
+                    model AND the dimension lines together. Otherwise dims
+                    floated off-frame at raw mm coords. */}
+                {(annotations?.length || (bbox && params)) ? (
+                  <DimAnnotations bbox={bbox} params={params} annotations={annotations} />
+                ) : null}
+                {bbox ? <OriginAxes bbox={bbox} /> : null}
               </Bounds>
-              {(annotations?.length || (bbox && params)) ? <DimAnnotations bbox={bbox} params={params} annotations={annotations} /> : null}
             </>
           ) : null}
           <OrbitControls makeDefault enableDamping dampingFactor={0.1} />

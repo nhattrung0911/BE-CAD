@@ -44,6 +44,59 @@ class DimensionAnnotation:
     plane: str = "XZ"
 
 
+# Dimension placement contract:
+#   - All dimension lines are anchored at the world coordinate origin and
+#     extend along a principal axis (X or Z). They are NEVER stuck to a part
+#     face whose position changes with parameters (e.g., "+Y face at y=s/2+2"),
+#     because that makes the dim drift relative to the model and confuses the
+#     viewer auto-fit.
+#   - Length-style dims (along Z): a vertical line at (radial_offset, 0, *)
+#     spanning [0, value]. Multiple Z dims stack at increasing radial offsets
+#     so they don't overlap.
+#   - Diameter-style dims (across X at z=0): a horizontal line through the
+#     origin in the XZ plane spanning [-value/2, +value/2]. Multiple X dims at
+#     z=0 stack along Z just above origin.
+# This keeps annotations co-located with the model bbox and stable as the
+# user edits parameters.
+
+_RADIAL_PAD = 4.0   # gap between part outer surface and first vertical dim line
+_RADIAL_STEP = 4.0  # additional offset per stacked vertical dim
+_X_DIM_Z_BASE = 0.0 # all "across X" dims sit at z=0 by default
+_X_DIM_Z_STEP = 1.5 # if multiple X dims at origin, stack along Z
+
+
+def _z_dim(key: str, value: float, slot: int, radial_anchor: float, color: str) -> DimensionAnnotation:
+    """Vertical (along Z) dimension: line at (radial_anchor + slot*step, 0, *)
+    spanning [0, value]."""
+    x = radial_anchor + _RADIAL_PAD + slot * _RADIAL_STEP
+    return DimensionAnnotation(
+        key=key,
+        label=LABEL_MAP.get(key, key),
+        value_mm=value,
+        from_point=[x, 0.0, 0.0],
+        to_point=[x, 0.0, value],
+        axis="z",
+        color_hex=color,
+        plane="XZ",
+    )
+
+
+def _x_dim(key: str, value: float, slot: int, color: str) -> DimensionAnnotation:
+    """Horizontal (across X) dimension at the origin plane: line at z = slot*step
+    spanning [-value/2, +value/2]."""
+    z = _X_DIM_Z_BASE - (slot + 1) * _X_DIM_Z_STEP
+    return DimensionAnnotation(
+        key=key,
+        label=LABEL_MAP.get(key, key),
+        value_mm=value,
+        from_point=[-value / 2, 0.0, z],
+        to_point=[value / 2, 0.0, z],
+        axis="x",
+        color_hex=color,
+        plane="XZ",
+    )
+
+
 def compute_annotations(
     family: str,
     params: dict[str, Any],
@@ -70,66 +123,18 @@ def _hex_bolt_annotations(params: dict[str, Any]) -> list[DimensionAnnotation]:
     width_across_flats = float(params["s"])
     thread_length = float(params.get("b", length * 0.6))
 
-    radius = diameter / 2
-    dim_offset_x = radius + 4.0
-    dim_offset_s = width_across_flats / 2 + 3.0
-    grip_mid_z = head_height + (length - thread_length) / 2
+    # Radial anchor = outer extent of the part in the XY plane (head flats win).
+    radial_anchor = max(width_across_flats / 2, diameter / 2)
 
-    annotations = [
-        DimensionAnnotation(
-            key="d",
-            label=LABEL_MAP["d"],
-            value_mm=diameter,
-            from_point=[-radius, 0.0, grip_mid_z],
-            to_point=[radius, 0.0, grip_mid_z],
-            axis="x",
-            color_hex=COLOR_MAP["d"],
-            plane="XZ",
-        ),
-        DimensionAnnotation(
-            key="L",
-            label=LABEL_MAP["L"],
-            value_mm=length,
-            from_point=[dim_offset_x + 2, 0.0, head_height],
-            to_point=[dim_offset_x + 2, 0.0, head_height + length],
-            axis="z",
-            color_hex=COLOR_MAP["L"],
-            plane="XZ",
-        ),
-        DimensionAnnotation(
-            key="k",
-            label=LABEL_MAP["k"],
-            value_mm=head_height,
-            from_point=[dim_offset_s + 2, 0.0, 0.0],
-            to_point=[dim_offset_s + 2, 0.0, head_height],
-            axis="z",
-            color_hex=COLOR_MAP["k"],
-            plane="XZ",
-        ),
-        DimensionAnnotation(
-            key="s",
-            label=LABEL_MAP["s"],
-            value_mm=width_across_flats,
-            from_point=[-width_across_flats / 2, width_across_flats / 2 + 2, head_height / 2],
-            to_point=[width_across_flats / 2, width_across_flats / 2 + 2, head_height / 2],
-            axis="x",
-            color_hex=COLOR_MAP["s"],
-            plane="XY",
-        ),
-    ]
+    annotations: list[DimensionAnnotation] = []
+    # Across-X dims at origin plane, stacked downward in Z.
+    annotations.append(_x_dim("d", diameter, slot=0, color=COLOR_MAP["d"]))
+    annotations.append(_x_dim("s", width_across_flats, slot=1, color=COLOR_MAP["s"]))
+    # Along-Z dims, stacked outward in X.
+    annotations.append(_z_dim("L", length, slot=0, radial_anchor=radial_anchor, color=COLOR_MAP["L"]))
+    annotations.append(_z_dim("k", head_height, slot=1, radial_anchor=radial_anchor, color=COLOR_MAP["k"]))
     if thread_length > 0:
-        annotations.append(
-            DimensionAnnotation(
-                key="b",
-                label=LABEL_MAP["b"],
-                value_mm=thread_length,
-                from_point=[-(dim_offset_x + 2), 0.0, head_height + length - thread_length],
-                to_point=[-(dim_offset_x + 2), 0.0, head_height + length],
-                axis="z",
-                color_hex=COLOR_MAP["b"],
-                plane="XZ",
-            )
-        )
+        annotations.append(_z_dim("b", thread_length, slot=2, radial_anchor=radial_anchor, color=COLOR_MAP["b"]))
     return annotations
 
 
@@ -137,40 +142,12 @@ def _hex_nut_annotations(params: dict[str, Any]) -> list[DimensionAnnotation]:
     diameter = float(params["d"])
     width_across_flats = float(params["s"])
     nut_height = float(params["m"])
-    bore_radius = diameter / 2
-    dim_offset = width_across_flats / 2 + 4.0
+    radial_anchor = width_across_flats / 2
 
     return [
-        DimensionAnnotation(
-            key="d",
-            label=LABEL_MAP["d"],
-            value_mm=diameter,
-            from_point=[-bore_radius, 0.0, nut_height / 2],
-            to_point=[bore_radius, 0.0, nut_height / 2],
-            axis="x",
-            color_hex=COLOR_MAP["d"],
-            plane="XZ",
-        ),
-        DimensionAnnotation(
-            key="s",
-            label=LABEL_MAP["s"],
-            value_mm=width_across_flats,
-            from_point=[-width_across_flats / 2, width_across_flats / 2 + 2, nut_height / 2],
-            to_point=[width_across_flats / 2, width_across_flats / 2 + 2, nut_height / 2],
-            axis="x",
-            color_hex=COLOR_MAP["s"],
-            plane="XY",
-        ),
-        DimensionAnnotation(
-            key="m",
-            label=LABEL_MAP["m"],
-            value_mm=nut_height,
-            from_point=[dim_offset, 0.0, 0.0],
-            to_point=[dim_offset, 0.0, nut_height],
-            axis="z",
-            color_hex=COLOR_MAP["m"],
-            plane="XZ",
-        ),
+        _x_dim("d", diameter, slot=0, color=COLOR_MAP["d"]),
+        _x_dim("s", width_across_flats, slot=1, color=COLOR_MAP["s"]),
+        _z_dim("m", nut_height, slot=0, radial_anchor=radial_anchor, color=COLOR_MAP["m"]),
     ]
 
 
@@ -178,39 +155,12 @@ def _washer_annotations(params: dict[str, Any]) -> list[DimensionAnnotation]:
     outer_diameter = float(params["OD"])
     inner_diameter = float(params["ID"])
     thickness = float(params["h"])
-    dim_z = thickness + 2.0
+    radial_anchor = outer_diameter / 2
 
     return [
-        DimensionAnnotation(
-            key="OD",
-            label=LABEL_MAP["OD"],
-            value_mm=outer_diameter,
-            from_point=[-outer_diameter / 2, 0.0, dim_z],
-            to_point=[outer_diameter / 2, 0.0, dim_z],
-            axis="x",
-            color_hex=COLOR_MAP["OD"],
-            plane="XZ",
-        ),
-        DimensionAnnotation(
-            key="ID",
-            label=LABEL_MAP["ID"],
-            value_mm=inner_diameter,
-            from_point=[-inner_diameter / 2, 0.0, thickness / 2],
-            to_point=[inner_diameter / 2, 0.0, thickness / 2],
-            axis="x",
-            color_hex=COLOR_MAP["ID"],
-            plane="XZ",
-        ),
-        DimensionAnnotation(
-            key="h",
-            label=LABEL_MAP["h"],
-            value_mm=thickness,
-            from_point=[outer_diameter / 2 + 3, 0.0, 0.0],
-            to_point=[outer_diameter / 2 + 3, 0.0, thickness],
-            axis="z",
-            color_hex=COLOR_MAP["h"],
-            plane="XZ",
-        ),
+        _x_dim("OD", outer_diameter, slot=0, color=COLOR_MAP["OD"]),
+        _x_dim("ID", inner_diameter, slot=1, color=COLOR_MAP["ID"]),
+        _z_dim("h", thickness, slot=0, radial_anchor=radial_anchor, color=COLOR_MAP["h"]),
     ]
 
 
@@ -218,36 +168,10 @@ def _retaining_ring_annotations(params: dict[str, Any]) -> list[DimensionAnnotat
     outer_diameter = float(params["OD"])
     hole_diameter = float(params["d1"])
     thickness = float(params["h"])
+    radial_anchor = outer_diameter / 2
 
     return [
-        DimensionAnnotation(
-            key="OD",
-            label=LABEL_MAP["OD"],
-            value_mm=outer_diameter,
-            from_point=[-outer_diameter / 2, 0.0, thickness + 2],
-            to_point=[outer_diameter / 2, 0.0, thickness + 2],
-            axis="x",
-            color_hex=COLOR_MAP["OD"],
-            plane="XZ",
-        ),
-        DimensionAnnotation(
-            key="d1",
-            label=LABEL_MAP["d1"],
-            value_mm=hole_diameter,
-            from_point=[-hole_diameter / 2, 0.0, thickness / 2],
-            to_point=[hole_diameter / 2, 0.0, thickness / 2],
-            axis="x",
-            color_hex=COLOR_MAP["d1"],
-            plane="XZ",
-        ),
-        DimensionAnnotation(
-            key="h",
-            label=LABEL_MAP["h"],
-            value_mm=thickness,
-            from_point=[outer_diameter / 2 + 3, 0.0, 0.0],
-            to_point=[outer_diameter / 2 + 3, 0.0, thickness],
-            axis="z",
-            color_hex=COLOR_MAP["h"],
-            plane="XZ",
-        ),
+        _x_dim("OD", outer_diameter, slot=0, color=COLOR_MAP["OD"]),
+        _x_dim("d1", hole_diameter, slot=1, color=COLOR_MAP["d1"]),
+        _z_dim("h", thickness, slot=0, radial_anchor=radial_anchor, color=COLOR_MAP["h"]),
     ]

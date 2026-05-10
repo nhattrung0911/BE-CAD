@@ -43,8 +43,8 @@ def test_geometry_variant_resolves_ready_artifact_for_threejs_viewer():
     assert body["artifact"]["format"] == "glb"
     assert body["artifact"]["url"].endswith("/preview.glb")
     assert body["params"]["d"] == 8
-    assert [annotation["key"] for annotation in body["annotations"]] == ["d", "L", "k", "s", "b"]
-    assert body["annotations"][0]["from_point"] == [-4.0, 0.0, 9.3]
+    assert [annotation["key"] for annotation in body["annotations"]] == ["d", "s", "L", "k", "b"]
+    assert body["annotations"][0]["from_point"] == [-4.0, 0.0, -1.5]
 
 
 def test_geometry_generate_returns_stable_hash_and_immutable_hash_url():

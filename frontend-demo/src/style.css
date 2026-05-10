@@ -414,6 +414,16 @@ a {
   letter-spacing: 0.3px;
 }
 
+.axis-label-cad {
+  background: transparent;
+  font: 700 11px/1 'Cambria Math', 'Times New Roman', Georgia, serif;
+  user-select: none;
+  pointer-events: none;
+}
+.axis-label-cad.axis-x { color: #d33; }
+.axis-label-cad.axis-y { color: #3a3; }
+.axis-label-cad.axis-z { color: #36c; }
+
 .viewer-html {
   background: rgba(12, 25, 39, 0.9);
   border-radius: 6px;
