@@ -384,6 +384,7 @@ a {
 }
 
 .viewer-stage {
+  position: relative;
   min-height: 680px;
   height: 100%;
   background: #eef1f5;
@@ -423,6 +424,26 @@ a {
 .axis-label-cad.axis-x { color: #d33; }
 .axis-label-cad.axis-y { color: #3a3; }
 .axis-label-cad.axis-z { color: #36c; }
+
+.viewer-controls-overlay {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #d8dde3;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  z-index: 5;
+  pointer-events: auto;
+}
+.viewer-controls-overlay .viewer-hint {
+  color: #6b7480;
+  font-style: italic;
+}
 
 .viewer-html {
   background: rgba(12, 25, 39, 0.9);

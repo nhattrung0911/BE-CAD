@@ -1,8 +1,9 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Canvas } from '@react-three/fiber';
-import { Bounds, Html, Line, OrbitControls, useGLTF } from '@react-three/drei';
+import { Bounds, Html, Line, OrbitControls, useBounds, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
+import { computeAutoRotateSpeed } from './viewerControls.js';
 import './style.css';
 
 const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
@@ -437,8 +438,30 @@ function DimensionPanel({ params, onParamChange, dirty, onApply, onReset, busy }
   );
 }
 
+// Click-to-refit helper: a transparent invisible plane wired to Bounds.refresh().fit().
+// Lives inside <Bounds> so it can call useBounds(). Clicking anywhere on the
+// canvas re-frames the camera around the current scene contents.
+function ClickToRefit() {
+  const bounds = useBounds();
+  return (
+    <mesh
+      position={[0, 0, 0]}
+      onClick={(event) => {
+        event.stopPropagation();
+        bounds.refresh().fit();
+      }}
+    >
+      {/* Big invisible sphere — large enough to catch clicks anywhere in view */}
+      <sphereGeometry args={[10000, 8, 8]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.BackSide} />
+    </mesh>
+  );
+}
+
 const ViewerStage = React.memo(function ViewerStage({ modelUrl, viewerMessage, params, annotations }) {
   const [bbox, setBBox] = useState(null);
+  const [autoRotate, setAutoRotate] = useState(true);
+  const rotateSpeed = useMemo(() => computeAutoRotateSpeed(bbox), [bbox]);
   return (
     <div className="viewer-stage">
       <ViewerErrorBoundary resetKey={modelUrl}>
@@ -456,6 +479,7 @@ const ViewerStage = React.memo(function ViewerStage({ modelUrl, viewerMessage, p
           {modelUrl ? (
             <>
               <Bounds fit clip observe margin={2.2}>
+                <ClickToRefit />
                 <Suspense fallback={null}>
                   <FastenerModel
                     key={modelUrl}
@@ -475,10 +499,29 @@ const ViewerStage = React.memo(function ViewerStage({ modelUrl, viewerMessage, p
               </Bounds>
             </>
           ) : null}
-          <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
+          <OrbitControls
+            makeDefault
+            enableDamping
+            dampingFactor={0.1}
+            autoRotate={autoRotate && !!modelUrl}
+            autoRotateSpeed={rotateSpeed}
+          />
         </Canvas>
       </ViewerErrorBoundary>
       {!modelUrl ? <div className="viewer-html-static">{viewerMessage}</div> : null}
+      {modelUrl ? (
+        <div className="viewer-controls-overlay">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => setAutoRotate((v) => !v)}
+            title="Toggle 360° auto-rotate (drag the model to take over manually)"
+          >
+            {autoRotate ? 'Pause rotate' : 'Auto-rotate'}
+          </button>
+          <span className="viewer-hint">click model to refit</span>
+        </div>
+      ) : null}
     </div>
   );
 });
