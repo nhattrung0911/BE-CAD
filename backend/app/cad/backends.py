@@ -41,20 +41,24 @@ class CadQueryBackend(CadBackend):
             raise RuntimeError("CAD_BACKEND=cadquery requires cadquery to be installed") from exc
         self.cq = cq
 
-    def generate(self, product_id: str, params: dict[str, Any], fmt: str, quality: str) -> GeneratedModel:
+    def build_shape(self, product_id: str, params: dict[str, Any]):
+        """Build the raw cadquery solid for a product (no export). Shared by
+        generate() and the 2D projection service."""
         family = template_registry.get_by_product(product_id).family
         if family == "hex_bolt":
-            shape = self._hex_bolt(params)
-        elif family == "hex_nut":
-            shape = self._hex_nut(params)
-        elif family == "washer":
-            shape = self._washer(params)
-        elif family == "retaining_ring":
-            shape = self._retaining_ring(params)
-        elif family == "button_head":
-            shape = self._button_head(params)
-        else:
-            raise KeyError(f"No CadQuery generator for family={family}")
+            return family, self._hex_bolt(params)
+        if family == "hex_nut":
+            return family, self._hex_nut(params)
+        if family == "washer":
+            return family, self._washer(params)
+        if family == "retaining_ring":
+            return family, self._retaining_ring(params)
+        if family == "button_head":
+            return family, self._button_head(params)
+        raise KeyError(f"No CadQuery generator for family={family}")
+
+    def generate(self, product_id: str, params: dict[str, Any], fmt: str, quality: str) -> GeneratedModel:
+        family, shape = self.build_shape(product_id, params)
         content, export_metadata = self._export(shape, fmt, family, params, quality)
         return GeneratedModel(
             content=content,
