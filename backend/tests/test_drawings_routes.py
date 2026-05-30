@@ -38,3 +38,25 @@ def test_2d_svg_rejects_unknown_view():
 def test_2d_svg_404_for_unknown_variant():
     resp = client.get("/api/v1/drawings/does-not-exist/2d.svg")
     assert resp.status_code == 404
+
+
+def test_datasheet_pdf_returns_pdf_with_params():
+    resp = client.get("/api/v1/drawings/hex-bolt-iso4014-m8x30/datasheet.pdf")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.content[:5] == b"%PDF-"
+
+    import io as _io
+
+    import pypdf
+
+    text = "\n".join(
+        page.extract_text() or "" for page in pypdf.PdfReader(_io.BytesIO(resp.content)).pages
+    )
+    assert "ISO4014" in text
+    assert "HEX-BOLT-ISO4014-M8X30" in text
+
+
+def test_datasheet_pdf_404_for_unknown_variant():
+    resp = client.get("/api/v1/drawings/nope/datasheet.pdf")
+    assert resp.status_code == 404

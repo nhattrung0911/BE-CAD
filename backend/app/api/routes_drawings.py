@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.config import settings
 from app.core.rate_limit import rate_limit
+from app.services.datasheet_service import build_datasheet_pdf
 from app.services.product_service import product_service
 from app.services.projection_service import VIEWS, drawing_svg
 
@@ -44,4 +45,33 @@ def variant_drawing_svg(
         content=svg,
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/{variant_id}/datasheet.pdf")
+def variant_datasheet_pdf(
+    variant_id: str,
+    _: None = Depends(_drawing_limit),
+):
+    try:
+        variant = product_service.get_variant(variant_id)
+        product = product_service.get_product(variant.product_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Variant not found")
+
+    param_labels = {spec.name: spec.label for spec in product.parameters}
+    pdf = build_datasheet_pdf(
+        product_name=product.name,
+        standard=variant.standard,
+        sku=variant.sku,
+        param_labels=param_labels,
+        params=dict(variant.params),
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "Content-Disposition": f'inline; filename="{variant.sku}.pdf"',
+        },
     )
