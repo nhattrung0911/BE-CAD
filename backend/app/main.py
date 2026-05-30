@@ -15,6 +15,7 @@ from app.api.routes_model_jobs import router as model_jobs_router
 from app.api.routes_metrics import router as metrics_router
 from app.api.routes_products import router as products_router
 from app.api.routes_models import router as models_router
+from app.api.routes_drawings import router as drawings_router
 from app.api.routes_raw_assets import router as raw_assets_router
 from app.api.routes_vendor_assets import router as vendor_assets_router
 from app.services.health_service import readiness_payload
@@ -50,6 +51,7 @@ app.include_router(geometry_router, prefix="/api/v1")
 app.include_router(model_jobs_router, prefix="/api/v1")
 app.include_router(vendor_assets_router, prefix="/api/v1")
 app.include_router(ingestion_router, prefix="/api/v1")
+app.include_router(drawings_router, prefix="/api/v1")
 app.include_router(raw_assets_router)
 app.include_router(metrics_router)
 
