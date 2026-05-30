@@ -27,7 +27,7 @@ SAMPLES_DIR = ROOT / "storage" / "research-samples"
 STANDARD_TO_PRODUCT = {
     "ISO4014": "hex-bolt-iso4014",
     "ISO4032": "hex-nut-iso4032",
-    "ISO4033": "hex-nut-iso4033",
+    "DIN6330": "hex-nut-din6330",
     "ISO7089": "washer-iso7089",
     "ISO7380": "button-head-iso7380",
     "DIN125": "washer-din125",
@@ -42,7 +42,7 @@ FILENAME_TO_VARIANT = {
     "din 933_m1.6x2.stp": "hex-bolt-din933-m1_6x2",
     "din931-2_m68x200.stp": None,  # M68x200 not in catalog seed; product-level
     "iso 7089_Φ1.6.stp": None,  # Φ1.6 not in catalog seed; product-level
-    "iso4033_m5.stp": "hex-nut-iso4033-m5",
+    "iso4033_m5.stp": None,  # catalog dropped ISO 4033; DIN 6330 has no M5
     "iso7380-1_m3x6.stp": "button-head-iso7380-m3x6",
 }
 

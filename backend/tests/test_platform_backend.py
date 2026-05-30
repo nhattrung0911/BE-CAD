@@ -147,21 +147,21 @@ def test_resolver_regenerates_stale_mock_artifact_when_backend_is_cadquery(monke
     from app.services.hash_service import stable_params_hash
     from app.services.job_runner import model_artifact_key
 
-    params = {"d": 12, "s": 17, "m": 10, "lod": "medium"}
+    params = {"d": 12, "s": 18, "m": 18, "lod": "medium"}
     params_hash = stable_params_hash(
-        "hex-nut-iso4033",
+        "hex-nut-din6330",
         settings.template_version,
         "preview",
         "glb",
         params,
     )
-    storage_key = model_artifact_key("hex-nut-iso4033", params_hash, "preview", "glb")
+    storage_key = model_artifact_key("hex-nut-din6330", params_hash, "preview", "glb")
     stale_payload = b'{\n  "format": "glb",\n  "generator": "mock"\n}'
 
     stored = artifact_service.put_bytes(storage_key, stale_payload, content_type="model/gltf-binary")
     with SessionLocal() as session:
         ArtifactRepository(session).create(
-            product_id="hex-nut-iso4033",
+            product_id="hex-nut-din6330",
             artifact_type="model",
             format="glb",
             quality="preview",
@@ -176,7 +176,7 @@ def test_resolver_regenerates_stale_mock_artifact_when_backend_is_cadquery(monke
 
     class FakeCadQueryBackend:
         def generate(self, product_id, generated_params, fmt, quality):
-            assert product_id == "hex-nut-iso4033"
+            assert product_id == "hex-nut-din6330"
             assert generated_params == params
             assert fmt == "glb"
             assert quality == "preview"
@@ -195,7 +195,7 @@ def test_resolver_regenerates_stale_mock_artifact_when_backend_is_cadquery(monke
         response = client.post(
             "/api/v1/models/resolve",
             json={
-                "product_id": "hex-nut-iso4033",
+                "product_id": "hex-nut-din6330",
                 "params": params,
                 "format": "glb",
                 "quality": "preview",

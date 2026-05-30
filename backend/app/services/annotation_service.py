@@ -8,6 +8,7 @@ LABEL_MAP = {
     "L": "Length (L)",
     "P": "Thread pitch (P)",
     "k": "Head height (k)",
+    "dk": "Head diameter (dk)",
     "s": "Width across flats (s)",
     "b": "Thread length (b)",
     "m": "Nut height (m)",
@@ -22,6 +23,7 @@ COLOR_MAP = {
     "L": "#A5D6A7",
     "s": "#FFB74D",
     "k": "#CE93D8",
+    "dk": "#4FC3F7",
     "P": "#80DEEA",
     "b": "#FFCC02",
     "m": "#CE93D8",
@@ -106,6 +108,7 @@ def compute_annotations(
         "hex_nut": _hex_nut_annotations,
         "washer": _washer_annotations,
         "retaining_ring": _retaining_ring_annotations,
+        "button_head": _button_head_annotations,
     }
     handler = handlers.get(family)
     if handler is None:
@@ -136,6 +139,41 @@ def _hex_bolt_annotations(params: dict[str, Any]) -> list[DimensionAnnotation]:
     if thread_length > 0:
         annotations.append(_z_dim("b", thread_length, slot=2, radial_anchor=radial_anchor, color=COLOR_MAP["b"]))
     return annotations
+
+
+def _button_head_annotations(params: dict[str, Any]) -> list[DimensionAnnotation]:
+    """ISO 7380 button head: shank runs z=0..L, domed head sits z=L..L+k.
+
+    External envelope only — shank d, head diameter dk, length L, head height k.
+    The internal hex socket (s, t) is intentionally not drawn in 3D; it stays an
+    editable parameter rather than a cluttered, hard-to-place internal callout.
+    """
+    diameter = float(params["d"])
+    head_dia = float(params["dk"])
+    length = float(params["L"])
+    head_height = float(params["k"])
+    radial_anchor = max(head_dia / 2, diameter / 2)
+
+    # Head height k is anchored at the head (z = L .. L+k), stacked outboard of
+    # the head flats so it does not overlap the L line at the origin.
+    k_x = radial_anchor + _RADIAL_PAD + _RADIAL_STEP
+    k_dim = DimensionAnnotation(
+        key="k",
+        label=LABEL_MAP["k"],
+        value_mm=head_height,
+        from_point=[k_x, 0.0, length],
+        to_point=[k_x, 0.0, length + head_height],
+        axis="z",
+        color_hex=COLOR_MAP["k"],
+        plane="XZ",
+    )
+
+    return [
+        _x_dim("d", diameter, slot=0, color=COLOR_MAP["d"]),
+        _x_dim("dk", head_dia, slot=1, color=COLOR_MAP["dk"]),
+        _z_dim("L", length, slot=0, radial_anchor=radial_anchor, color=COLOR_MAP["L"]),
+        k_dim,
+    ]
 
 
 def _hex_nut_annotations(params: dict[str, Any]) -> list[DimensionAnnotation]:

@@ -264,10 +264,10 @@ def test_repository_find_for_variant_ignores_unapproved_status():
     assert result is None
 
 
-def test_din933_and_iso4033_in_catalog():
+def test_din933_and_din6330_in_catalog():
     response = client.get("/api/v1/products")
     assert response.status_code == 200
     ids = {p["product_id"] for p in response.json()}
     assert "hex-bolt-din933" in ids
-    assert "hex-nut-iso4033" in ids
+    assert "hex-nut-din6330" in ids
     assert "button-head-iso7380" in ids

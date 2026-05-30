@@ -37,7 +37,7 @@ STANDARD_TO_PRODUCT = {
     "ISO4014": "hex-bolt-iso4014",
     "ISO4017": "hex-bolt-iso4017",
     "ISO4032": "hex-nut-iso4032",
-    "ISO4033": "hex-nut-iso4033",
+    "DIN6330": "hex-nut-din6330",
     "ISO7089": "washer-iso7089",
     "ISO7380": "hex-bolt-iso7380",
     "DIN125": "washer-din125",

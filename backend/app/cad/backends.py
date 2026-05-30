@@ -9,6 +9,11 @@ logger = logging.getLogger(__name__)
 
 from app.cad.registry import template_registry
 from app.cad.template_base import GeneratedModel
+from app.cad.tessellation import DEFAULT_LOD, tessellation_for_lod
+
+# Hard ceiling on a single preview GLB. If a high-LOD mesh would exceed this we
+# step the tolerance back one tier rather than ship a multi-MB preview.
+_GLB_BYTE_CEILING = 6 * 1024 * 1024
 
 
 class CadBackend:
@@ -198,9 +203,30 @@ class CadQueryBackend(CadBackend):
         shank_radius = d / 2
         head_radius = head_dia / 2
 
-        # Domed head: cylinder + filleted top edge approximated by spherical cap
+        # Orientation: the threaded shank runs from the base (z=0) up to z=L, and
+        # the domed head sits ABOVE it (z=L .. L+k). The hex socket is cut into
+        # the head's free top face so it stays visible. (The earlier build offset
+        # the shank by the head height and cut the socket into the same face the
+        # shank was unioned onto, burying the socket under the shank.)
+        pitch = float(params.get("P") or 0)
+        if pitch > 0:
+            shank = self._build_threaded_shank(
+                length=total_length,
+                major_r=shank_radius,
+                pitch=pitch,
+                z_start=0.0,
+            )
+        else:
+            shank = (
+                self.cq.Workplane("XY")
+                .circle(shank_radius)
+                .extrude(total_length)
+            )
+
+        # Domed head stacked on top of the shank.
         head = (
             self.cq.Workplane("XY")
+            .workplane(offset=total_length)
             .circle(head_radius)
             .extrude(head_height)
         )
@@ -210,7 +236,7 @@ class CadQueryBackend(CadBackend):
         except Exception as exc:
             logger.warning("button_head fillet skipped (k=%s, dk=%s): %s", head_height, head_dia, exc)
 
-        # Hex socket cut from top of head
+        # Hex socket cut into the free top face of the head.
         socket_circumradius = socket_size / math.sqrt(3)
         try:
             head = (
@@ -222,22 +248,7 @@ class CadQueryBackend(CadBackend):
         except Exception as exc:
             logger.warning("button_head socket cut skipped: %s", exc)
 
-        pitch = float(params.get("P") or 0)
-        if pitch > 0:
-            shank = self._build_threaded_shank(
-                length=total_length,
-                major_r=shank_radius,
-                pitch=pitch,
-                z_start=head_height,
-            )
-        else:
-            shank = (
-                self.cq.Workplane("XY")
-                .workplane(offset=head_height)
-                .circle(shank_radius)
-                .extrude(total_length)
-            )
-        return head.union(shank)
+        return shank.union(head)
 
     def _hex_nut(self, params: dict[str, Any]):
         for key in ["d", "s", "m"]:
@@ -291,7 +302,7 @@ class CadQueryBackend(CadBackend):
 
     def _export(self, shape, fmt: str, family: str, params: dict[str, Any], quality: str) -> tuple[bytes, dict[str, Any]]:
         if fmt == "glb":
-            return self._export_glb(shape, family, quality)
+            return self._export_glb(shape, family, quality, str(params.get("lod") or DEFAULT_LOD))
 
         suffix = ".step" if fmt == "step" else ".stl"
         export_type = "STEP" if fmt == "step" else "STL"
@@ -303,17 +314,51 @@ class CadQueryBackend(CadBackend):
         finally:
             path.unlink(missing_ok=True)
 
-    def _export_glb(self, shape, family: str, quality: str) -> tuple[bytes, dict[str, Any]]:
+    def _part_size_mm(self, shape) -> float:
+        """Largest bounding-box dimension of the solid, for size-relative
+        tessellation. Returns 0.0 if the bbox cannot be computed (callers treat
+        0 as "unknown" and fall back to the tolerance floor)."""
+        try:
+            bb = shape.val().BoundingBox()
+            return max(bb.xlen, bb.ylen, bb.zlen)
+        except Exception as exc:  # noqa: BLE001 - bbox is best-effort
+            logger.warning("bbox for tessellation failed: %s", exc)
+            return 0.0
+
+    def _export_glb(self, shape, family: str, quality: str, lod: str = DEFAULT_LOD) -> tuple[bytes, dict[str, Any]]:
+        size_mm = self._part_size_mm(shape)
+        linear, angular = tessellation_for_lod(lod, size_mm)
+        data = self._write_glb(shape, family, quality, linear, angular)
+
+        # Guard against pathological density at high LOD: step back one tier.
+        if len(data) > _GLB_BYTE_CEILING and lod != "low":
+            fallback = "medium" if lod == "high" else "low"
+            logger.warning(
+                "GLB over ceiling (%d bytes) at lod=%s; retrying at lod=%s",
+                len(data), lod, fallback,
+            )
+            linear, angular = tessellation_for_lod(fallback, size_mm)
+            data = self._write_glb(shape, family, quality, linear, angular)
+            lod = fallback
+
+        return data, {
+            "exporter": "cadquery_assembly_glb",
+            "lod": lod,
+            "tessellation_linear_mm": round(linear, 4),
+            "tessellation_angular_rad": round(angular, 4),
+        }
+
+    def _write_glb(self, shape, family: str, quality: str, linear: float, angular: float) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".glb", delete=False) as tmp:
             path = Path(tmp.name)
         try:
             assembly = self.cq.Assembly()
             assembly.add(shape, color=self.cq.Color(0.72, 0.72, 0.70), name=f"{family}_{quality}")
-            assembly.export(str(path), tolerance=0.1, angularTolerance=0.2)
+            assembly.export(str(path), tolerance=linear, angularTolerance=angular)
             data = path.read_bytes()
             if not data.startswith(b"glTF"):
                 raise RuntimeError("CadQuery GLB export did not produce a binary glTF payload")
-            return data, {"exporter": "cadquery_assembly_glb"}
+            return data
         finally:
             path.unlink(missing_ok=True)
 

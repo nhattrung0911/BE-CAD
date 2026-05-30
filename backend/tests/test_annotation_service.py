@@ -1,4 +1,30 @@
+import pytest
+
 from app.services.annotation_service import compute_annotations
+
+
+def test_compute_annotations_returns_button_head_dimensions():
+    annotations = compute_annotations(
+        "button_head",
+        {"d": 3, "L": 6, "P": 0.5, "dk": 5.7, "k": 1.65, "s": 2.0, "t": 1.04},
+    )
+
+    # External envelope dims only: shank d, head dia dk, length L, head height k.
+    # The internal socket (s, t) is intentionally not drawn in 3D.
+    assert [annotation.key for annotation in annotations] == ["d", "dk", "L", "k"]
+
+    # L spans the shank, anchored at the origin (z = 0 .. L).
+    l_dim = next(a for a in annotations if a.key == "L")
+    assert l_dim.from_point[2] == 0.0
+    assert l_dim.to_point[2] == 6.0
+
+    # k is the head height, positioned AT the head (z = L .. L+k), stacked above
+    # the shank — not redrawn from the origin.
+    k_dim = next(a for a in annotations if a.key == "k")
+    assert k_dim.from_point[2] == 6.0
+    assert k_dim.to_point[2] == pytest.approx(7.65)
+    # head-height dim sits outboard of the head flats
+    assert k_dim.from_point[0] > 5.7 / 2
 
 
 def test_compute_annotations_returns_expected_hex_bolt_dimensions():

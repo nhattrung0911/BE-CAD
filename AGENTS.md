@@ -191,7 +191,7 @@ Demo seed (`app/services/demo_catalog.py`) carries 9 products across 4 families:
 | Family | Standards | Notes |
 |---|---|---|
 | `hex_bolt` | ISO 4014, DIN 931, DIN 933 | DIN 933 = fully threaded |
-| `hex_nut` | ISO 4032, ISO 4033 | ISO 4033 = high nut |
+| `hex_nut` | ISO 4032, DIN 6330 | DIN 6330 = high nut (height 1.5d) |
 | `washer` | ISO 7089, DIN 125 | |
 | `retaining_ring` | GB 891 | |
 | `button_head` | ISO 7380 | Domed head + hex socket cap |
